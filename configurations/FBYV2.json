@@ -491,22 +491,24 @@
             "Bus": 10,
              "Labels": [
                 "iout1",
-                "pin1",
-                "vin1",
-                "temp1"
+                "pin",
+                "vin",
+                "temp1",
+                "peakiout1",
+                "peakpin"	
             ],
             "Name": "SP_HSC_ADM1278",
             "Thresholds": [
                 {
                     "Direction": "greater than",
-                    "Label": "vin1",
+                    "Label": "vin",
                     "Name": "upper critical",
                     "Severity": 1,
                     "Value": 13.75
                 },
                 {
                     "Direction": "less than",
-                    "Label": "vin1",
+                    "Label": "vin",
                     "Name": "lower critical",
                     "Severity": 0,
                     "Value": 11.25
@@ -520,17 +522,31 @@
                 },
                 {
                     "Direction": "greater than",
-                    "Label": "pin1",
+                    "Label": "pin",
                     "Name": "upper critical",
                     "Severity": 1,
                     "Value": 625
                 },
                 {
-                    "Direction": "greater than",
+                    "Direction": "less than",
                     "Label": "temp1",
                     "Name": "upper critical",
                     "Severity": 1,
                     "Value": 105
+                },
+                {
+                    "Direction": "less than",
+                    "Label": "peakiout1",
+                    "Name": "lower critical",
+                    "Severity": 1,
+                    "Value": 0
+                },
+		{
+                    "Direction": "less than",
+                    "Label": "peakpin",
+                    "Name": "lower critical",
+                    "Severity": 1,
+                    "Value": 0
                 }
             ],
             "Type": "pmbus"
