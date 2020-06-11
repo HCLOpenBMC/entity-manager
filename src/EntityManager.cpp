@@ -30,13 +30,14 @@
 #include <boost/container/flat_map.hpp>
 #include <boost/container/flat_set.hpp>
 #include <boost/range/iterator_range.hpp>
+#include <nlohmann/json.hpp>
+#include <sdbusplus/asio/connection.hpp>
+#include <sdbusplus/asio/object_server.hpp>
+
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <nlohmann/json.hpp>
 #include <regex>
-#include <sdbusplus/asio/connection.hpp>
-#include <sdbusplus/asio/object_server.hpp>
 #include <variant>
 constexpr const char* configurationDirectory = PACKAGE_DIR "configurations";
 constexpr const char* schemaDirectory = PACKAGE_DIR "configurations/schemas";
@@ -74,8 +75,8 @@ const static boost::container::flat_map<const char*, probe_type_codes, cmp_str>
                  {"FOUND", probe_type_codes::FOUND},
                  {"MATCH_ONE", probe_type_codes::MATCH_ONE}}};
 
-static constexpr std::array<const char*, 5> settableInterfaces = {
-    "FanProfile", "Pid", "Pid.Zone", "Stepwise", "Thresholds"};
+static constexpr std::array<const char*, 6> settableInterfaces = {
+    "FanProfile", "Pid", "Pid.Zone", "Stepwise", "Thresholds", "Polling"};
 using JsonVariantType =
     std::variant<std::vector<std::string>, std::vector<double>, std::string,
                  int64_t, uint64_t, double, int32_t, uint32_t, int16_t,
@@ -505,8 +506,7 @@ PerformProbe::PerformProbe(const std::vector<std::string>& probeCommand,
                            std::function<void(FoundDeviceT&)>&& callback) :
     _probeCommand(probeCommand),
     scan(scanPtr), _callback(std::move(callback))
-{
-}
+{}
 PerformProbe::~PerformProbe()
 {
     FoundDeviceT foundDevs;
@@ -1096,9 +1096,10 @@ void postToDbus(const nlohmann::json& newConfiguration,
                                 "." + objectPair.key(),
                             boardKeyOrig);
 
-                    populateInterfaceFromJson(
-                        systemConfiguration, jsonPointerPath, objectIface,
-                        objectPair.value(), objServer, getPermission(itemType));
+                    populateInterfaceFromJson(systemConfiguration,
+                                              jsonPointerPath, objectIface,
+                                              objectPair.value(), objServer,
+                                              getPermission(objectPair.key()));
                 }
                 else if (objectPair.value().type() ==
                          nlohmann::json::value_t::array)
@@ -1265,8 +1266,7 @@ PerformScan::PerformScan(nlohmann::json& systemConfiguration,
     _missingConfigurations(missingConfigurations),
     _configurations(configurations), objServer(objServerIn),
     _callback(std::move(callback))
-{
-}
+{}
 void PerformScan::run()
 {
     boost::container::flat_set<std::string> dbusProbeInterfaces;
