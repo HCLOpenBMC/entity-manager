@@ -20,7 +20,6 @@
             ],
             "Type": "ADC"
         },
-
         {
             "Index": 1,
             "Name": " SP_P12V",
@@ -490,12 +489,14 @@
             "Address": "0x40",
             "Bus": 10,
              "Labels": [
+                "vin",
                 "iout1",
                 "pin",
-                "vin",
                 "temp1",
-                "peakiout1",
-                "peakpin"	
+                "maxvin",
+                "maxiout1",
+                "maxpin",
+                "maxtemp1"
             ],
             "Name": "SP_HSC_ADM1278",
             "Thresholds": [
@@ -536,14 +537,28 @@
                 },
                 {
                     "Direction": "less than",
-                    "Label": "peakiout1",
+                    "Label": "maxvin",
                     "Name": "lower critical",
                     "Severity": 1,
                     "Value": 0
                 },
 		{
                     "Direction": "less than",
-                    "Label": "peakpin",
+                    "Label": "maxpin",
+                    "Name": "lower critical",
+                    "Severity": 1,
+                    "Value": 0
+                },
+		{
+                    "Direction": "less than",
+                    "Label": "maxiout1",
+                    "Name": "lower critical",
+                    "Severity": 1,
+                    "Value": 0
+                },
+		{
+                    "Direction": "less than",
+                    "Label": "maxtemp1",
                     "Name": "lower critical",
                     "Severity": 1,
                     "Value": 0
