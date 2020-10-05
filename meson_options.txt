@@ -4,3 +4,6 @@ option(
 option(
     'fru-device', type: 'boolean', description: 'Build fru-device.',
 )
+option(
+    'Ipmb-fru-device', type: 'boolean', description: 'Build Ipmb-fru-device.',
+)
