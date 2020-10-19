@@ -547,9 +547,6 @@ void ipmbWrite(uint8_t ipmbAddress, uint8_t offset, const std::vector<uint8_t>& 
                                        "/xyz/openbmc_project/Ipmi/Channel/Ipmb",
                                        "org.openbmc.Ipmb", "sendRequest");
 
-    printf("ipmb addr2 = %d\n", ipmbAddress);
-    std::cout.flush();
-
     method.append(ipmbAddress, netFn, lun, cmd, cmdData);
 
     auto reply = systemBus->call(method);
@@ -562,25 +559,14 @@ void ipmbWrite(uint8_t ipmbAddress, uint8_t offset, const std::vector<uint8_t>& 
     IpmbMethodType resp;
     reply.read(resp);
 
-    int a = std::get<0>(resp);
+/*    int a = std::get<0>(resp);
     uint8_t b = std::get<1>(resp);
     uint8_t c = std::get<2>(resp);
     uint8_t d = std::get<3>(resp);
     uint8_t e = std::get<4>(resp);
-
-    printf("Resp Header Write : %d:%d:%d:%d:%d\n", a, b, c, d, e); 
-    std::cout.flush();
  
     std::vector<uint8_t> data;
-    data = std::get<5>(resp);
-
-    std::cout << "Ipmb resp data - Write FRU : ";
-    for(int i=0; i<data.size(); i++)
-    {
-       printf("%d :", data.at(i));
-       std::cout.flush();
-    }   
-    std::cerr<<"\n"; 
+    data = std::get<5>(resp); */
 
     respData =
         std::move(std::get<std::remove_reference_t<decltype(respData)>>(resp));
@@ -736,9 +722,6 @@ void getAreaInfo(uint8_t ipmbAddress, uint8_t &compCode, uint16_t &readLen)
                                        "/xyz/openbmc_project/Ipmi/Channel/Ipmb",
                                        "org.openbmc.Ipmb", "sendRequest");
 
-    printf("ipmb addr1 = %d\n", ipmbAddress);
-    std::cout.flush();
-
     method.append(ipmbAddress, netFn, lun, cmd, cmdData);
 
     auto reply = systemBus->call(method);
@@ -758,21 +741,10 @@ void getAreaInfo(uint8_t ipmbAddress, uint8_t &compCode, uint16_t &readLen)
     uint8_t b = std::get<1>(resp);
     uint8_t c = std::get<2>(resp);
     uint8_t d = std::get<3>(resp);
-    uint8_t e = std::get<4>(resp);
-
-    printf("FRU Area Resp Header: %d:%d:%d:%d:%d\n", a, b, c, d, e); 
-    std::cout.flush(); */
+    uint8_t e = std::get<4>(resp); */
  
     std::vector<uint8_t> data;
     data = std::get<5>(resp);
-
-    std::cerr << "Ipmb resp data for FRU Area: ";
-    for(int i=0; i<data.size(); i++)
-    {
-       printf("%d :", data.at(i));
-       std::cout.flush();
-    }   
-    std::cerr<<"\n"; 
 
     readLen = ((data.at(1) << 8) | data.at(0)); 
 
@@ -797,9 +769,6 @@ void ipmbReadFru(uint8_t ipmbAddress, uint8_t offset, std::vector<uint8_t> &fruR
                                        "/xyz/openbmc_project/Ipmi/Channel/Ipmb",
                                        "org.openbmc.Ipmb", "sendRequest");
 
-    printf("ipmb addr2 = %d\n", ipmbAddress);
-    std::cout.flush();
-
     method.append(ipmbAddress, netFn, lun, cmd, cmdData);
 
     auto reply = systemBus->call(method);
@@ -812,14 +781,11 @@ void ipmbReadFru(uint8_t ipmbAddress, uint8_t offset, std::vector<uint8_t> &fruR
     IpmbMethodType resp;
     reply.read(resp);
 
-    int a = std::get<0>(resp);
+/*    int a = std::get<0>(resp);
     uint8_t b = std::get<1>(resp);
     uint8_t c = std::get<2>(resp);
     uint8_t d = std::get<3>(resp);
     uint8_t e = std::get<4>(resp);
-
-    printf("Resp Header : %d:%d:%d:%d:%d\n", a, b, c, d, e); 
-    std::cout.flush();
  
     std::vector<uint8_t> data;
     data = std::get<5>(resp);
@@ -830,7 +796,7 @@ void ipmbReadFru(uint8_t ipmbAddress, uint8_t offset, std::vector<uint8_t> &fruR
        printf("%d :", data.at(i));
        std::cout.flush();
     }   
-    std::cerr<<"\n"; 
+    std::cerr<<"\n"; */
 
     respData =
         std::move(std::get<std::remove_reference_t<decltype(respData)>>(resp));
@@ -856,6 +822,7 @@ void ipmbScanDevices(boost::container::flat_map<
     uint16_t readLen = 0;
     int iter = 0;
     int offset = 0;
+    int count = 0;
 
     hostDev.clear();
     busMap.clear();
@@ -875,37 +842,24 @@ void ipmbScanDevices(boost::container::flat_map<
        // Add code for Get FRU Area Info 
        getAreaInfo(ipmbAddress.at(iter), compCode, readLen);
 
-       printf("compCode : %d\n", compCode);
-       std::cout.flush();
-
        if(compCode == 0)
        {
           while(offset < readLen)
-          {
-            printf("offset = %d\n", offset);
-            std::cout.flush();
-             
+          { 
             ipmbReadFru(ipmbAddress.at(iter), offset, fruResponse);
             offset = offset + 49;
           }
        }
 
-       std::cerr << "Read fru Done \n";    
-       printf("fru response : ");
-       for(int i=0; i<fruResponse.size(); i++)
-       {
-           printf("%d:", fruResponse.at(i));
-       }
-
        hostDev[0] = fruResponse;
-       busMap[iter] = std::make_shared<DeviceMap>(hostDev);
+       busMap[count++] = std::make_shared<DeviceMap>(hostDev);
 
        offset = 0; 
        compCode = 0;
        fruResponse.clear();       
     }
     
-    iter = 0; 
+    count = 0; 
    
     for (auto& devicemap : busMap)
     {

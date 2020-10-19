@@ -42,7 +42,7 @@ if get_option('fru-device')
 endif
 
 executable(
-     'Ipmb-fru-device',
+     'ipmb-fru-device',
      'IpmbFruDevice.cpp',
      'Utils.cpp',
       cpp_args: cpp_args,

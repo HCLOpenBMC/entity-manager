@@ -1,10 +1,10 @@
 [Unit]
-Description=Fru Device
+Description=Ipmb Fru Device
 StopWhenUnneeded=true
-After=xyz.openbmc_project.CloseMuxes.service dbus.service
+After=xyz.openbmc_project.CloseMuxes.service dbus.service ipmb.service
 
 [Service]
-ExecStart=/usr/bin/Ipmb-fru-device
+ExecStart=/usr/bin/ipmb-fru-device
 Type=simple
 
 [Install]
