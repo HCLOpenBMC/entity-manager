@@ -1,5 +1,13 @@
 {
     "Exposes": [
+       {
+            "Address": "0x03",
+            "Bus": "$bus",
+            "Class": "twin_lake_gpio",
+            "PowerState": "Always",
+            "Name": "$bus + 1 GPIO Status",
+            "Type": "IpmbSensor"
+        },
         {
             "Address": "0x01",
             "Bus": "$bus",
