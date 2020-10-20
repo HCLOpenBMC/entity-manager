@@ -1,6 +1,6 @@
 {
     "Exposes": [
-       {
+        {
             "Address": "0x03",
             "Bus": "$bus",
             "Class": "twin_lake_gpio",
@@ -14,6 +14,7 @@
             "Class": "twin_lake_fw_version",
             "PowerState": "Always",
             "Name": "$bus + 1 CPLD",
+            "SensorType": "version",
             "Type": "IpmbSensor"
         },
         {
@@ -22,6 +23,7 @@
             "Class": "twin_lake_fw_version",
             "PowerState": "Always",
             "Name": "$bus + 1 Bridge IC",
+            "SensorType": "version",
             "Type": "IpmbSensor"
         },
         {
@@ -30,6 +32,7 @@
             "Class": "twin_lake_fw_version",
             "PowerState": "Always",
             "Name": "$bus + 1 ME",
+            "SensorType": "version",
             "Type": "IpmbSensor"
         },
         {
@@ -38,6 +41,7 @@
             "Class": "twin_lake_fw_version",
             "PowerState": "Always",
             "Name": "$bus + 1 Bridge IC Bootloader",
+            "SensorType": "version",
             "Type": "IpmbSensor"
         },
         {
@@ -46,6 +50,7 @@
             "Class": "twin_lake_fw_version",
             "PowerState": "Always",
             "Name": "$bus + 1 VCCIO VR",
+            "SensorType": "version",
             "Type": "IpmbSensor"
         },
         {
@@ -54,6 +59,7 @@
             "Class": "twin_lake_fw_version",
             "PowerState": "Always",
             "Name": "$bus + 1 VCCIN VR",
+            "SensorType": "version",
             "Type": "IpmbSensor"
         },
         {
@@ -62,6 +68,7 @@
             "Class": "twin_lake_fw_version",
             "PowerState": "Always",
             "Name": "$bus + 1 VCCSA VR",
+            "SensorType": "version",
             "Type": "IpmbSensor"
         },
         {
@@ -70,6 +77,7 @@
             "Class": "twin_lake_fw_version",
             "PowerState": "Always",
             "Name": "$bus + 1 DDR AB VR",
+            "SensorType": "version",
             "Type": "IpmbSensor"
         },
         {
@@ -78,6 +86,7 @@
             "Class": "twin_lake_fw_version",
             "PowerState": "Always",
             "Name": "$bus + 1 DDR DE VR",
+            "SensorType": "version",
             "Type": "IpmbSensor"
         },
         {
@@ -86,6 +95,7 @@
             "Class": "twin_lake_fw_version",
             "PowerState": "Always",
             "Name": "$bus + 1 VNNPCH VR",
+            "SensorType": "version",
             "Type": "IpmbSensor"
         },
         {
@@ -94,6 +104,7 @@
             "Class": "twin_lake_fw_version",
             "PowerState": "Always",
             "Name": "$bus + 1 1V05PCH VR",
+            "SensorType": "version",
             "Type": "IpmbSensor"
         },
         {
