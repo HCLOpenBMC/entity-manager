@@ -1,7 +1,8 @@
 [Unit]
 Description=Ipmb Fru Device
 StopWhenUnneeded=true
-After=xyz.openbmc_project.CloseMuxes.service dbus.service ipmb.device
+After=xyz.openbmc_project.FruDevice.service xyz.openbmc_project.CloseMuxes.service dbus.service ipmb.device
+Wants=xyz.openbmc_project.FruDevice.service
 
 [Service]
 ExecStart=/usr/bin/ipmb-fru-device
