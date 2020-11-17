@@ -109,6 +109,7 @@ configs = [
     'STP Baseboard.json',
     'STP P4000 Chassis.json',
     'WFT Baseboard.json',
+	'Twinlake.json',
 ]
 
 foreach c : configs
