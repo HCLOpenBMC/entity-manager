@@ -8,6 +8,16 @@
             "Name": "$bus + 1 GPIO Status",
             "Type": "IpmbSensor"
         },
+		{
+            "Address": "0x01",
+            "Bus": "$bus",
+            "Class": "twin_lake_fw_version",
+            "PowerState": "Always",
+            "Name": "$bus + 1 BIOS",
+            "SensorType": "version",
+            "Type": "IpmbSensor"
+        },
+
         {
             "Address": "0x01",
             "Bus": "$bus",
