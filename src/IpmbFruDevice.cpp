@@ -1,5 +1,5 @@
 /*
-// Copyright (c)
+// Copyright (c) 2018 Intel Corporation
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,8 +13,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 */
+/// \file FruDevice.cpp
 
 #include "Utils.hpp"
+#include "Common.hpp"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -54,6 +56,7 @@ extern "C"
 #include <linux/i2c-dev.h>
 }
 
+
 std::vector<uint8_t> ipmbAddress;
 
 using IpmbMethodType =
@@ -63,9 +66,6 @@ static constexpr bool DEBUG = false;
 static size_t UNKNOWN_BUS_OBJECT_COUNT = 0;
 constexpr size_t MAX_FRU_SIZE = 1024;
 
-static constexpr std::array<const char*, 5> FRU_AREAS = {
-    "INTERNAL", "CHASSIS", "BOARD", "PRODUCT", "MULTIRECORD"};
-const static std::regex NON_ASCII_REGEX("[^\x01-\x7f]");
 using DeviceMap = boost::container::flat_map<int, std::vector<uint8_t>>;
 using BusMap = boost::container::flat_map<int, std::shared_ptr<DeviceMap>>;
 
@@ -75,280 +75,14 @@ boost::asio::io_service io;
 auto systemBus = std::make_shared<sdbusplus::asio::connection>(io);
 auto objServer = sdbusplus::asio::object_server(systemBus);
 
-static const std::vector<const char*> CHASSIS_FRU_AREAS = {
-    "PART_NUMBER", "SERIAL_NUMBER", "INFO_AM1", "INFO_AM2"};
-
-static const std::vector<const char*> BOARD_FRU_AREAS = {
-    "MANUFACTURER",   "PRODUCT_NAME", "SERIAL_NUMBER", "PART_NUMBER",
-    "FRU_VERSION_ID", "INFO_AM1",     "INFO_AM2"};
-
-static const std::vector<const char*> PRODUCT_FRU_AREAS = {
-    "MANUFACTURER", "PRODUCT_NAME",   "PART_NUMBER", "VERSION", "SERIAL_NUMBER",
-    "ASSET_TAG",    "FRU_VERSION_ID", "INFO_AM1",    "INFO_AM2"};
-
-bool formatFru(const std::vector<uint8_t>& fruBytes,
-               boost::container::flat_map<std::string, std::string>& result);
-
-size_t calculateChecksum(std::vector<uint8_t>& fruAreaData);
-
-std::vector<uint8_t>& getFruInfo(const uint8_t& bus, const uint8_t& address);
-
-void AddFruObjectToDbus(
-    std::vector<uint8_t>& device,
-    boost::container::flat_map<
-        std::pair<size_t, size_t>,
-        std::shared_ptr<sdbusplus::asio::dbus_interface>>& dbusInterfaceMap,
-    uint32_t bus, uint32_t address);
-
-bool updateFruProperty(
+bool updateFRUProperty(
     const std::string& assetTag, uint32_t bus, uint32_t address,
     std::string propertyName,
     boost::container::flat_map<
         std::pair<size_t, size_t>,
         std::shared_ptr<sdbusplus::asio::dbus_interface>>& dbusInterfaceMap);
 
-static bool isMuxBus(size_t bus)
-{
-    return is_symlink(std::filesystem::path(
-        "/sys/bus/i2c/devices/i2c-" + std::to_string(bus) + "/mux_device"));
-}
-
-static const std::tm intelEpoch(void)
-{
-    std::tm val = {};
-    val.tm_year = 1996 - 1900;
-    return val;
-}
-
-static char sixBitToChar(uint8_t val)
-{
-    return static_cast<char>((val & 0x3f) + ' ');
-}
-
-/* 0xd - 0xf are reserved values, but not fatal; use a placeholder char. */
-static const char bcdHighChars[] = {
-    ' ', '-', '.', 'X', 'X', 'X',
-};
-
-static char bcdPlusToChar(uint8_t val)
-{
-    val &= 0xf;
-    return (val < 10) ? static_cast<char>(val + '0') : bcdHighChars[val - 10];
-}
-
-enum class DecodeState
-{
-    ok,
-    end,
-    err,
-};
-
-enum FRUDataEncoding
-{
-    binary = 0x0,
-    bcdPlus = 0x1,
-    sixBitASCII = 0x2,
-    languageDependent = 0x3,
-};
-
-/* Decode FRU data into a std::string, given an input iterator and end. If the
- * state returned is fruDataOk, then the resulting string is the decoded FRU
- * data. The input iterator is advanced past the data consumed.
- *
- * On fruDataErr, we have lost synchronisation with the length bytes, so the
- * iterator is no longer usable.
- */
-
-static std::pair<DecodeState, std::string>
-    decodeFruData(std::vector<uint8_t>::const_iterator& iter,
-                  const std::vector<uint8_t>::const_iterator& end)
-{
-    std::string value;
-    unsigned int i;
-
-    /* we need at least one byte to decode the type/len header */
-    if (iter == end)
-    {
-        std::cerr << "Truncated FRU data\n";
-        return make_pair(DecodeState::err, value);
-    }
-
-    uint8_t c = *(iter++);
-
-    /* 0xc1 is the end marker */
-    if (c == 0xc1)
-    {
-        return make_pair(DecodeState::end, value);
-    }
-
-    /* decode type/len byte */
-    uint8_t type = static_cast<uint8_t>(c >> 6);
-    uint8_t len = static_cast<uint8_t>(c & 0x3f);
-
-    /* we should have at least len bytes of data available overall */
-    if (iter + len > end)
-    {
-        std::cerr << "FRU data field extends past end of FRU data\n";
-        return make_pair(DecodeState::err, value);
-    }
-
-    switch (type)
-    {
-        case FRUDataEncoding::binary:
-        case FRUDataEncoding::languageDependent:
-            /* For language-code dependent encodings, assume 8-bit ASCII */
-            value = std::string(iter, iter + len);
-            iter += len;
-            break;
-
-        case FRUDataEncoding::bcdPlus:
-            value = std::string();
-            for (i = 0; i < len; i++, iter++)
-            {
-                uint8_t val = *iter;
-                value.push_back(bcdPlusToChar(val >> 4));
-                value.push_back(bcdPlusToChar(val & 0xf));
-            }
-            break;
-
-        case FRUDataEncoding::sixBitASCII:
-        {
-            unsigned int accum = 0;
-            unsigned int accumBitLen = 0;
-            value = std::string();
-            for (i = 0; i < len; i++, iter++)
-            {
-                accum |= *iter << accumBitLen;
-                accumBitLen += 8;
-                while (accumBitLen >= 6)
-                {
-                    value.push_back(sixBitToChar(accum & 0x3f));
-                    accum >>= 6;
-                    accumBitLen -= 6;
-                }
-            }
-        }
-        break;
-    }
-
-    return make_pair(DecodeState::ok, value);
-}
-
-bool formatFru(const std::vector<uint8_t>& fruBytes,
-               boost::container::flat_map<std::string, std::string>& result)
-{
-    if (fruBytes.size() <= 8)
-    {
-        return false;
-    }
-    std::vector<uint8_t>::const_iterator fruAreaOffsetField = fruBytes.begin();
-    result["Common_Format_Version"] =
-        std::to_string(static_cast<int>(*fruAreaOffsetField));
-
-    const std::vector<const char*>* fieldData;
-
-    for (const std::string& area : FRU_AREAS)
-    {
-        ++fruAreaOffsetField;
-        if (fruAreaOffsetField >= fruBytes.end())
-        {
-            return false;
-        }
-        size_t offset = (*fruAreaOffsetField) * 8;
-
-        if (offset > 1)
-        {
-            // +2 to skip format and length
-            std::vector<uint8_t>::const_iterator fruBytesIter =
-                fruBytes.begin() + offset + 2;
-
-            if (fruBytesIter >= fruBytes.end())
-            {
-                return false;
-            }
-
-            if (area == "CHASSIS")
-            {
-                result["CHASSIS_TYPE"] =
-                    std::to_string(static_cast<int>(*fruBytesIter));
-                fruBytesIter += 1;
-                fieldData = &CHASSIS_FRU_AREAS;
-            }
-            else if (area == "BOARD")
-            {
-                result["BOARD_LANGUAGE_CODE"] =
-                    std::to_string(static_cast<int>(*fruBytesIter));
-                fruBytesIter += 1;
-                if (fruBytesIter >= fruBytes.end())
-                {
-                    return false;
-                }
-
-                unsigned int minutes = *fruBytesIter |
-                                       *(fruBytesIter + 1) << 8 |
-                                       *(fruBytesIter + 2) << 16;
-                std::tm fruTime = intelEpoch();
-                std::time_t timeValue = std::mktime(&fruTime);
-                timeValue += minutes * 60;
-                fruTime = *std::gmtime(&timeValue);
-
-                // Tue Nov 20 23:08:00 2018
-                char timeString[32] = {0};
-                auto bytes = std::strftime(timeString, sizeof(timeString),
-                                           "%Y-%m-%d - %H:%M:%S", &fruTime);
-                if (bytes == 0)
-                {
-                    std::cerr << "invalid time string encountered\n";
-                    return false;
-                }
-
-                result["BOARD_MANUFACTURE_DATE"] = std::string(timeString);
-                fruBytesIter += 3;
-                fieldData = &BOARD_FRU_AREAS;
-            }
-            else if (area == "PRODUCT")
-            {
-                result["PRODUCT_LANGUAGE_CODE"] =
-                    std::to_string(static_cast<int>(*fruBytesIter));
-                fruBytesIter += 1;
-                fieldData = &PRODUCT_FRU_AREAS;
-            }
-            else
-            {
-                continue;
-            }
-            for (auto& field : *fieldData)
-            {
-                auto res = decodeFruData(fruBytesIter, fruBytes.end());
-                std::string name = area + "_" + field;
-
-                if (res.first == DecodeState::end)
-                {
-                    break;
-                }
-                else if (res.first == DecodeState::err)
-                {
-                    std::cerr << "Error while parsing " << name << "\n";
-                    return false;
-                }
-
-                std::string value = res.second;
-
-                // Strip non null characters from the end
-                value.erase(std::find_if(value.rbegin(), value.rend(),
-                                         [](char ch) { return ch != 0; })
-                                .base(),
-                            value.end());
-
-                result[name] = std::move(value);
-            }
-        }
-    }
-
-    return true;
-}
-
-std::vector<uint8_t>& getFruInfo(const uint8_t& bus, const uint8_t& address)
+std::vector<uint8_t>& getFRUInfo(const uint8_t& bus, const uint8_t& address)
 {
     auto deviceMap = busMap.find(bus);
     if (deviceMap == busMap.end())
@@ -365,32 +99,31 @@ std::vector<uint8_t>& getFruInfo(const uint8_t& bus, const uint8_t& address)
     return ret;
 }
 
-void AddFruObjectToDbus(
+void AddFRUObjectToDbus(
     std::vector<uint8_t>& device,
     boost::container::flat_map<
         std::pair<size_t, size_t>,
         std::shared_ptr<sdbusplus::asio::dbus_interface>>& dbusInterfaceMap,
     uint32_t bus, uint32_t address)
 {
-
-    boost::container::flat_map<std::string, std::string> formattedFru;
-    if (!formatFru(device, formattedFru))
+    boost::container::flat_map<std::string, std::string> formattedFRU;
+    if (!formatFRU(device, formattedFRU))
     {
         std::cerr << "failed to format fru for device at bus " << bus
                   << " address " << address << "\n";
         return;
     }
 
-    auto productNameFind = formattedFru.find("BOARD_PRODUCT_NAME");
+    auto productNameFind = formattedFRU.find("BOARD_PRODUCT_NAME");
     std::string productName;
     // Not found under Board section or an empty string.
-    if (productNameFind == formattedFru.end() ||
+    if (productNameFind == formattedFRU.end() ||
         productNameFind->second.empty())
     {
-        productNameFind = formattedFru.find("PRODUCT_PRODUCT_NAME");
+        productNameFind = formattedFRU.find("PRODUCT_PRODUCT_NAME");
     }
     // Found under Product section and not an empty string.
-    if (productNameFind != formattedFru.end() &&
+    if (productNameFind != formattedFRU.end() &&
         !productNameFind->second.empty())
     {
         productName = productNameFind->second;
@@ -412,20 +145,17 @@ void AddFruObjectToDbus(
 
         for (auto const& busIface : dbusInterfaceMap)
         {
-
             std::string path = busIface.second->get_object_path();
             if (std::regex_match(path, std::regex(productName + "(_\\d+|)$")))
             {
-
                 if (isMuxBus(bus) && address == busIface.first.second &&
-                    (getFruInfo(static_cast<uint8_t>(busIface.first.first),
+                    (getFRUInfo(static_cast<uint8_t>(busIface.first.first),
                                 static_cast<uint8_t>(busIface.first.second)) ==
-                     getFruInfo(static_cast<uint8_t>(bus),
+                     getFRUInfo(static_cast<uint8_t>(bus),
                                 static_cast<uint8_t>(address))))
                 {
                     // This device is already added to the lower numbered bus,
                     // do not replicate it.
-
                     return;
                 }
 
@@ -459,12 +189,12 @@ void AddFruObjectToDbus(
     }
 
     std::shared_ptr<sdbusplus::asio::dbus_interface> iface =
-        objServer.add_interface(productName,
-                                "xyz.openbmc_project.Ipmb.FruDevice");
+        objServer.add_interface(productName, "xyz.openbmc_project.Ipmb.FruDevice");
     dbusInterfaceMap[std::pair<size_t, size_t>(bus, address)] = iface;
 
-    for (auto& property : formattedFru)
+    for (auto& property : formattedFRU)
     {
+
         std::regex_replace(property.second.begin(), property.second.begin(),
                            property.second.end(), NON_ASCII_REGEX, "_");
         if (property.second.empty() && property.first != "PRODUCT_ASSET_TAG")
@@ -484,7 +214,7 @@ void AddFruObjectToDbus(
                     if (strcmp(req.c_str(), resp.c_str()))
                     {
                         // call the method which will update
-                        if (updateFruProperty(req, bus, address, propertyName,
+                        if (updateFRUProperty(req, bus, address, propertyName,
                                               dbusInterfaceMap))
                         {
                             resp = req;
@@ -492,7 +222,7 @@ void AddFruObjectToDbus(
                         else
                         {
                             throw std::invalid_argument(
-                                "Fru property update failed.");
+                                "FRU property update failed.");
                         }
                     }
                     return 1;
@@ -515,38 +245,35 @@ void AddFruObjectToDbus(
     iface->initialize();
 }
 
-void ipmbWrite(uint8_t ipmbAddress, uint8_t offset,
-               const std::vector<uint8_t>& fru)
-{
-    uint8_t cmd = 0x12;
-    uint8_t netFn = 0xa;
+void ipmbWrite(uint8_t ipmbAddress, uint8_t offset, const std::vector<uint8_t>& fru)
+{   
+    uint8_t cmd = 0x12;   
+    uint8_t netFn = 0xa; 
     uint8_t lun = 0;
-    uint8_t iter = 0;
     std::vector<uint8_t> cmdData;
     std::vector<uint8_t> respData;
 
-    cmdData.emplace_back(fru.size() + 3);
+    cmdData.emplace_back(fru.size()+3); 
     cmdData.emplace_back(0);
     cmdData.emplace_back(offset);
     cmdData.emplace_back(0);
     cmdData.emplace_back(fru.size());
-
-    for (iter = 0; iter < fru.size(); iter++)
+    
+    for(int iter=0; iter<fru.size(); iter++)
     {
-        cmdData.emplace_back(fru.at(iter));
-    }
-
-    auto method =
-        systemBus->new_method_call("xyz.openbmc_project.Ipmi.Channel.Ipmb",
-                                   "/xyz/openbmc_project/Ipmi/Channel/Ipmb",
-                                   "org.openbmc.Ipmb", "sendRequest");
+       cmdData.emplace_back(fru.at(iter));
+    } 
+        
+    auto method = systemBus->new_method_call("xyz.openbmc_project.Ipmi.Channel.Ipmb",
+                                       "/xyz/openbmc_project/Ipmi/Channel/Ipmb",
+                                       "org.openbmc.Ipmb", "sendRequest");
 
     method.append(ipmbAddress, netFn, lun, cmd, cmdData);
 
     auto reply = systemBus->call(method);
     if (reply.is_method_error())
     {
-        std::cerr << "Error reading from Ipmb";
+        std::cerr<< "Error reading from Ipmb";
         return;
     }
 
@@ -555,15 +282,15 @@ void ipmbWrite(uint8_t ipmbAddress, uint8_t offset,
 
     respData =
         std::move(std::get<std::remove_reference_t<decltype(respData)>>(resp));
+       
+    return;    
 
-    return;
 }
 
 bool ipmbWriteFru(uint8_t bus, uint8_t address, const std::vector<uint8_t>& fru)
 {
     uint8_t offset = 0;
 
-    std::cout << "Write Addres : " << address << std::endl;
     boost::container::flat_map<std::string, std::string> tmp;
     if (fru.size() > MAX_FRU_SIZE)
     {
@@ -571,145 +298,87 @@ bool ipmbWriteFru(uint8_t bus, uint8_t address, const std::vector<uint8_t>& fru)
         return false;
     }
     // verify legal fru by running it through fru parsing logic
-    if (!formatFru(fru, tmp))
+    if (!formatFRU(fru, tmp))
     {
         std::cerr << "Invalid fru format during writeFru\n";
         return false;
     }
-
+ 
     ipmbWrite(ipmbAddress.at(bus), offset, fru);
 
-    return true;
-}
-
-// Calculate new checksum for fru info area
-size_t calculateChecksum(std::vector<uint8_t>& fruAreaData)
-{
-    constexpr int checksumMod = 256;
-    constexpr uint8_t modVal = 0xFF;
-    int sum = std::accumulate(fruAreaData.begin(), fruAreaData.end(), 0);
-    return (checksumMod - sum) & modVal;
-}
-
-// Update new fru area length &
-// Update checksum at new checksum location
-static void updateFruAreaLenAndChecksum(std::vector<uint8_t>& fruData,
-                                        size_t fruAreaStartOffset,
-                                        size_t fruAreaNoMoreFieldOffset)
-{
-    constexpr size_t fruAreaMultipleBytes = 8;
-    size_t traverseFruAreaIndex = fruAreaNoMoreFieldOffset - fruAreaStartOffset;
-
-    // fill zeros for any remaining unused space
-    std::fill(fruData.begin() + fruAreaNoMoreFieldOffset, fruData.end(), 0);
-
-    size_t mod = traverseFruAreaIndex % fruAreaMultipleBytes;
-    size_t checksumLoc;
-    if (!mod)
-    {
-        traverseFruAreaIndex += (fruAreaMultipleBytes);
-        checksumLoc = fruAreaNoMoreFieldOffset + (fruAreaMultipleBytes - 1);
-    }
-    else
-    {
-        traverseFruAreaIndex += (fruAreaMultipleBytes - mod);
-        checksumLoc =
-            fruAreaNoMoreFieldOffset + (fruAreaMultipleBytes - mod - 1);
-    }
-
-    size_t newFruAreaLen = (traverseFruAreaIndex / fruAreaMultipleBytes) +
-                           ((traverseFruAreaIndex % fruAreaMultipleBytes) != 0);
-    size_t fruAreaLengthLoc = fruAreaStartOffset + 1;
-    fruData[fruAreaLengthLoc] = static_cast<uint8_t>(newFruAreaLen);
-
-    // Calculate new checksum
-    std::vector<uint8_t> finalFruData;
-    std::copy_n(fruData.begin() + fruAreaStartOffset,
-                checksumLoc - fruAreaStartOffset,
-                std::back_inserter(finalFruData));
-
-    size_t checksumVal = calculateChecksum(finalFruData);
-
-    fruData[checksumLoc] = static_cast<uint8_t>(checksumVal);
-}
-
-static size_t getTypeLength(uint8_t fruFieldTypeLenValue)
-{
-    constexpr uint8_t typeLenMask = 0x3F;
-    return fruFieldTypeLenValue & typeLenMask;
+    return true;            
 }
 
 void findIpmbDev(std::vector<uint8_t>& ipmbAddr)
 {
-    constexpr const char* configFilePath =
+    constexpr const char *configFilePath =
         "/usr/share/ipmbbridge/ipmb-channels.json";
 
     uint8_t devIndex = 0;
-    uint8_t type = 0;
+    uint8_t type = 0; 
 
     std::ifstream configFile(configFilePath);
     if (!configFile.is_open())
     {
-        std::cerr << "findIpmbDev : Cannot open config path \n";
+        std::cerr<<"findIpmbDev : Cannot open config path \n";
         return;
     }
     try
     {
         auto data = nlohmann::json::parse(configFile, nullptr);
-        for (const auto& channelConfig : data["channels"])
-        {
-            const std::string& typeConfig = channelConfig["type"];
+        for (const auto &channelConfig : data["channels"])
+        {  
+            const std::string &typeConfig = channelConfig["type"];
             devIndex = (static_cast<uint8_t>(channelConfig["devIndex"]));
 
-            if (typeConfig.compare("me") == 0)
+            if(typeConfig.compare("me") == 0)
             {
-                type = 1;
+               type = 1;
             }
-            else if (typeConfig.compare("ipmb") == 0)
+            else if(typeConfig.compare("ipmb") == 0)
             {
-                type = 0;
+               type = 0;
             }
             else
             {
-                std::cerr << "findIpmbDev : Invalid type in json\n";
-                return;
+               std::cerr<<"findIpmbDev : Invalid type in json\n";
+               return;  
             }
-
+             
             ipmbAddr.push_back(((devIndex << 2) | type));
         }
     }
-    catch (nlohmann::json::exception& e)
+    catch (nlohmann::json::exception &e)
     {
-        std::cerr << "findIpmbDev : Error parsing config file \n";
+        std::cerr<<"findIpmbDev : Error parsing config file \n";
         return;
     }
-    catch (std::out_of_range& e)
+    catch (std::out_of_range &e)
     {
-        std::cerr << "findIpmbDev : Error invalid type \n";
+         std::cerr<<"findIpmbDev : Error invalid type \n";
         return;
     }
-}
+} 
 
-void getAreaInfo(uint8_t ipmbAddress, uint8_t& compCode, uint16_t& readLen)
+void getAreaInfo(uint8_t ipmbAddress, uint8_t &compCode, uint16_t &readLen)
 {
-    uint8_t cmd = 0x10;
-    uint8_t netFn = 0xa;
+    uint8_t cmd = 0x10;   
+    uint8_t netFn = 0xa; 
     static const uint8_t lun = 0;
-
+    
     std::vector<uint8_t> cmdData{0};
     std::vector<uint8_t> respData;
 
-    auto method =
-        systemBus->new_method_call("xyz.openbmc_project.Ipmi.Channel.Ipmb",
-                                   "/xyz/openbmc_project/Ipmi/Channel/Ipmb",
-                                   "org.openbmc.Ipmb", "sendRequest");
+    auto method = systemBus->new_method_call("xyz.openbmc_project.Ipmi.Channel.Ipmb",
+                                       "/xyz/openbmc_project/Ipmi/Channel/Ipmb",
+                                       "org.openbmc.Ipmb", "sendRequest");
 
     method.append(ipmbAddress, netFn, lun, cmd, cmdData);
 
     auto reply = systemBus->call(method);
     if (reply.is_method_error())
     {
-        std::cerr << "Error reading from Ipmb";
+        std::cerr<< "Error reading from Ipmb";
         return;
     }
 
@@ -717,43 +386,41 @@ void getAreaInfo(uint8_t ipmbAddress, uint8_t& compCode, uint16_t& readLen)
     reply.read(resp);
 
     // Assign Response completion code
-    compCode = std::get<4>(resp);
+    compCode  = std::get<4>(resp);
 
     std::vector<uint8_t> data;
     data = std::get<5>(resp);
 
-    readLen = ((data.at(1) << 8) | data.at(0));
+    readLen = ((data.at(1) << 8) | data.at(0)); 
 
     respData =
         std::move(std::get<std::remove_reference_t<decltype(respData)>>(resp));
 }
 
-void ipmbReadFru(uint8_t ipmbAddress, uint8_t offset,
-                 std::vector<uint8_t>& fruResponse)
-{
-    uint8_t cmd = 0x11;
-    uint8_t netFn = 0xa;
+
+void ipmbReadFru(uint8_t ipmbAddress, uint8_t offset, std::vector<uint8_t> &fruResponse)
+{ 
+    uint8_t cmd = 0x11;   
+    uint8_t netFn = 0xa; 
     uint8_t lun = 0;
-    uint8_t iter = 0;
     std::vector<uint8_t> cmdData;
     std::vector<uint8_t> respData;
-
+ 
     cmdData.emplace_back(0);
     cmdData.emplace_back(offset);
     cmdData.emplace_back(0);
     cmdData.emplace_back(49);
 
-    auto method =
-        systemBus->new_method_call("xyz.openbmc_project.Ipmi.Channel.Ipmb",
-                                   "/xyz/openbmc_project/Ipmi/Channel/Ipmb",
-                                   "org.openbmc.Ipmb", "sendRequest");
+    auto method = systemBus->new_method_call("xyz.openbmc_project.Ipmi.Channel.Ipmb",
+                                       "/xyz/openbmc_project/Ipmi/Channel/Ipmb",
+                                       "org.openbmc.Ipmb", "sendRequest");
 
     method.append(ipmbAddress, netFn, lun, cmd, cmdData);
 
     auto reply = systemBus->call(method);
     if (reply.is_method_error())
     {
-        std::cerr << "Error reading from Ipmb";
+        std::cerr<< "Error reading from Ipmb";
         return;
     }
 
@@ -762,28 +429,27 @@ void ipmbReadFru(uint8_t ipmbAddress, uint8_t offset,
 
     respData =
         std::move(std::get<std::remove_reference_t<decltype(respData)>>(resp));
-
+       
     respData.erase(respData.begin());
-
-    for (iter = 0; iter < respData.size(); iter++)
+ 
+    for(int i=0; i<respData.size(); i++)
     {
-        fruResponse.push_back(respData.at(iter));
-    }
-
-    return;
+        fruResponse.push_back(respData.at(i));
+    } 
+     
+    return;    
 }
 
-void ipmbScanDevices(
-    boost::container::flat_map<
+void ipmbScanDevices(boost::container::flat_map<
         std::pair<size_t, size_t>,
         std::shared_ptr<sdbusplus::asio::dbus_interface>>& dbusInterfaceMap)
-{
+{ 
     std::vector<uint8_t> fruResponse;
     boost::container::flat_map<int, std::vector<uint8_t>> hostDev;
 
     uint8_t compCode = 0;
     uint16_t readLen = 0;
-    uint8_t iter = 0;
+    int iter = 0;
     int offset = 0;
     int count = 0;
 
@@ -801,37 +467,41 @@ void ipmbScanDevices(
     ipmbAddress.clear();
     findIpmbDev(ipmbAddress);
 
-    for (iter = 0; iter < ipmbAddress.size(); iter++)
+    printf("Size = %d\n", ipmbAddress.size());
+    std::cout.flush();
+
+    for(iter=0; iter<ipmbAddress.size(); iter++)
     {
-        // Add code for Get FRU Area Info
-        getAreaInfo(ipmbAddress.at(iter), compCode, readLen);
+       // Add code for Get FRU Area Info 
+       getAreaInfo(ipmbAddress.at(iter), compCode, readLen);
 
-        if (compCode == 0)
-        {
-            while (offset < readLen)
-            {
-                ipmbReadFru(ipmbAddress.at(iter), offset, fruResponse);
-                offset = offset + 49;
-            }
-        }
+       if(compCode == 0)
+       {
+          while(offset < readLen)
+          {
+            ipmbReadFru(ipmbAddress.at(iter), offset, fruResponse);
+            offset = offset + 49;
+          }
+       }
 
-        hostDev[0] = fruResponse;
-        busMap[count++] = std::make_shared<DeviceMap>(hostDev);
+       hostDev[0] = fruResponse;
+       busMap[count++] = std::make_shared<DeviceMap>(hostDev);
 
-        offset = 0;
-        compCode = 0;
-        fruResponse.clear();
+       offset = 0; 
+       readLen = 0;
+       fruResponse.clear();
     }
-
+    
     for (auto& devicemap : busMap)
     {
         for (auto& device : *devicemap.second)
-        {
-            AddFruObjectToDbus(device.second, dbusInterfaceMap, devicemap.first,
-                               device.first);
+        { 
+                AddFRUObjectToDbus(device.second, dbusInterfaceMap,
+                                           devicemap.first, device.first);
         }
-    }
+    } 
 }
+
 
 // Details with example of Asset Tag Update
 // To find location of Product Info Area asset tag as per FRU specification
@@ -844,7 +514,7 @@ void ipmbScanDevices(
 // 4. Update the Asset Tag, reposition the product Info area in multiple of
 // 8 bytes. Update the Product area length and checksum.
 
-bool updateFruProperty(
+bool updateFRUProperty(
     const std::string& updatePropertyReq, uint32_t bus, uint32_t address,
     std::string propertyName,
     boost::container::flat_map<
@@ -855,7 +525,7 @@ bool updateFruProperty(
     if (updatePropertyReqLen == 1 || updatePropertyReqLen > 63)
     {
         std::cerr
-            << "Fru field data cannot be of 1 char or more than 63 chars. "
+            << "FRU field data cannot be of 1 char or more than 63 chars. "
                "Invalid Length "
             << updatePropertyReqLen << "\n";
         return false;
@@ -864,12 +534,12 @@ bool updateFruProperty(
     std::vector<uint8_t> fruData;
     try
     {
-        fruData = getFruInfo(static_cast<uint8_t>(bus),
+        fruData = getFRUInfo(static_cast<uint8_t>(bus),
                              static_cast<uint8_t>(address));
     }
     catch (std::invalid_argument& e)
     {
-        std::cerr << "Failure getting Fru Info" << e.what() << "\n";
+        std::cerr << "Failure getting FRU Info" << e.what() << "\n";
         return false;
     }
 
@@ -878,96 +548,170 @@ bool updateFruProperty(
         return false;
     }
 
-    const std::vector<const char*>* fieldData;
+    const std::vector<std::string>* fruAreaFieldNames;
 
-    constexpr size_t commonHeaderMultipleBytes = 8; // in multiple of 8 bytes
-    uint8_t fruAreaOffsetFieldValue = 1;
+    uint8_t fruAreaOffsetFieldValue = 0;
     size_t offset = 0;
-
-    if (propertyName.find("CHASSIS") == 0)
+    std::string areaName = propertyName.substr(0, propertyName.find("_"));
+    std::string propertyNamePrefix = areaName + "_";
+    auto it = std::find(FRU_AREA_NAMES.begin(), FRU_AREA_NAMES.end(), areaName);
+    if (it == FRU_AREA_NAMES.end())
     {
-        constexpr size_t fruAreaOffsetField = 2;
-        fruAreaOffsetFieldValue = fruData[fruAreaOffsetField];
-
-        offset = 3; // chassis part number offset. Skip fixed first 3 bytes
-
-        fieldData = &CHASSIS_FRU_AREAS;
+        std::cerr << "Can't parse area name for property " << propertyName
+                  << " \n";
+        return false;
     }
-    else if (propertyName.find("BOARD") == 0)
+    fruAreas fruAreaToUpdate =
+        static_cast<fruAreas>(it - FRU_AREA_NAMES.begin());
+    fruAreaOffsetFieldValue =
+        fruData[getHeaderAreaFieldOffset(fruAreaToUpdate)];
+    switch (fruAreaToUpdate)
     {
-        constexpr size_t fruAreaOffsetField = 3;
-        fruAreaOffsetFieldValue = fruData[fruAreaOffsetField];
-
-        offset = 6; // board manufacturer offset. Skip fixed first 6 bytes
-
-        fieldData = &BOARD_FRU_AREAS;
+        case fruAreas::fruAreaChassis:
+            offset = 3; // chassis part number offset. Skip fixed first 3 bytes
+            fruAreaFieldNames = &CHASSIS_FRU_AREAS;
+            break;
+        case fruAreas::fruAreaBoard:
+            offset = 6; // board manufacturer offset. Skip fixed first 6 bytes
+            fruAreaFieldNames = &BOARD_FRU_AREAS;
+            break;
+        case fruAreas::fruAreaProduct:
+            // Manufacturer name offset. Skip fixed first 3 product fru bytes
+            // i.e. version, area length and language code
+            offset = 3;
+            fruAreaFieldNames = &PRODUCT_FRU_AREAS;
+            break;
+        default:
+            std::cerr << "Don't know how to handle property " << propertyName
+                      << " \n";
+            return false;
     }
-    else if (propertyName.find("PRODUCT") == 0)
+    if (fruAreaOffsetFieldValue == 0)
     {
-        constexpr size_t fruAreaOffsetField = 4;
-        fruAreaOffsetFieldValue = fruData[fruAreaOffsetField];
-
-        offset = 3;
-        // Manufacturer name offset. Skip fixed first 3 product fru bytes i.e.
-        // version, area length and language code
-
-        fieldData = &PRODUCT_FRU_AREAS;
-    }
-    else
-    {
-        std::cerr << "ProperyName doesn't exist in Fru Area Vector \n";
+        std::cerr << "FRU Area for " << propertyName << " not present \n";
         return false;
     }
 
-    size_t fruAreaStartOffset =
-        fruAreaOffsetFieldValue * commonHeaderMultipleBytes;
-    size_t fruDataIter = fruAreaStartOffset + offset;
-    size_t fruUpdateFieldLoc = 0;
-    size_t typeLength;
-    size_t skipToFruUpdateField = 0;
+    size_t fruAreaStart = fruAreaOffsetFieldValue * fruBlockSize;
+    size_t fruAreaSize = fruData[fruAreaStart + 1] * fruBlockSize;
+    size_t fruAreaEnd = fruAreaStart + fruAreaSize;
+    size_t fruDataIter = fruAreaStart + offset;
+    size_t fruUpdateFieldLoc = fruDataIter;
+    size_t skipToFRUUpdateField = 0;
+    ssize_t fieldLength;
 
-    for (auto& field : *fieldData)
+    bool found = false;
+    for (auto& field : *fruAreaFieldNames)
     {
-        skipToFruUpdateField++;
-        if (propertyName.find(field) != std::string::npos)
+        skipToFRUUpdateField++;
+        if (propertyName == propertyNamePrefix + field)
         {
+            found = true;
             break;
         }
     }
-
-    for (size_t i = 1; i < skipToFruUpdateField; i++)
+    if (!found)
     {
-        typeLength = getTypeLength(fruData[fruDataIter]);
-        fruUpdateFieldLoc = fruDataIter + typeLength;
-        fruDataIter = ++fruUpdateFieldLoc;
+        std::size_t pos = propertyName.find(FRU_CUSTOM_FIELD_NAME);
+        if (pos == std::string::npos)
+        {
+            std::cerr << "PropertyName doesn't exist in FRU Area Vectors: "
+                      << propertyName << "\n";
+            return false;
+        }
+        std::string fieldNumStr =
+            propertyName.substr(pos + FRU_CUSTOM_FIELD_NAME.length());
+        size_t fieldNum = std::stoi(fieldNumStr);
+        if (fieldNum == 0)
+        {
+            std::cerr << "PropertyName not recognized: " << propertyName
+                      << "\n";
+            return false;
+        }
+        skipToFRUUpdateField += fieldNum;
     }
+
+    for (size_t i = 1; i < skipToFRUUpdateField; i++)
+    {
+        fieldLength = getFieldLength(fruData[fruDataIter]);
+        if (fieldLength < 0)
+        {
+            break;
+        }
+        fruDataIter += 1 + fieldLength;
+    }
+    fruUpdateFieldLoc = fruDataIter;
 
     // Push post update fru field bytes to a vector
-    typeLength = getTypeLength(fruData[fruUpdateFieldLoc]);
-    size_t postFruUpdateFieldLoc = fruUpdateFieldLoc + typeLength;
-    postFruUpdateFieldLoc++;
-    skipToFruUpdateField++;
-    fruDataIter = postFruUpdateFieldLoc;
-    size_t endLengthLoc = 0;
-    size_t fruFieldLoc = 0;
-    constexpr uint8_t endLength = 0xC1;
-    for (size_t i = fruDataIter; i < fruData.size(); i++)
+    fieldLength = getFieldLength(fruData[fruUpdateFieldLoc]);
+    if (fieldLength < 0)
     {
-        typeLength = getTypeLength(fruData[fruDataIter]);
-        fruFieldLoc = fruDataIter + typeLength;
-        fruDataIter = ++fruFieldLoc;
-        if (fruData[fruDataIter] == endLength)
+        std::cerr << "Property " << propertyName << " not present \n";
+        return false;
+    }
+    fruDataIter += 1 + fieldLength;
+    size_t restFRUFieldsLoc = fruDataIter;
+    size_t endOfFieldsLoc = 0;
+    while ((fieldLength = getFieldLength(fruData[fruDataIter])) >= 0)
+    {
+        if (fruDataIter >= (fruAreaStart + fruAreaSize))
         {
-            endLengthLoc = fruDataIter;
+            fruDataIter = fruAreaStart + fruAreaSize;
             break;
         }
+        fruDataIter += 1 + fieldLength;
     }
-    endLengthLoc++;
+    endOfFieldsLoc = fruDataIter;
 
-    std::vector<uint8_t> postUpdatedFruData;
-    std::copy_n(fruData.begin() + postFruUpdateFieldLoc,
-                endLengthLoc - postFruUpdateFieldLoc,
-                std::back_inserter(postUpdatedFruData));
+    std::vector<uint8_t> restFRUAreaFieldsData;
+    std::copy_n(fruData.begin() + restFRUFieldsLoc,
+                endOfFieldsLoc - restFRUFieldsLoc + 1,
+                std::back_inserter(restFRUAreaFieldsData));
+
+    // Push post update fru areas if any
+    unsigned int nextFRUAreaLoc = 0;
+    for (fruAreas nextFRUArea = fruAreas::fruAreaInternal;
+         nextFRUArea <= fruAreas::fruAreaMultirecord; ++nextFRUArea)
+    {
+        unsigned int fruAreaLoc =
+            fruData[getHeaderAreaFieldOffset(nextFRUArea)] * fruBlockSize;
+        if ((fruAreaLoc > endOfFieldsLoc) &&
+            ((nextFRUAreaLoc == 0) || (fruAreaLoc < nextFRUAreaLoc)))
+        {
+            nextFRUAreaLoc = fruAreaLoc;
+        }
+    }
+    std::vector<uint8_t> restFRUAreasData;
+    if (nextFRUAreaLoc)
+    {
+        std::copy_n(fruData.begin() + nextFRUAreaLoc,
+                    fruData.size() - nextFRUAreaLoc,
+                    std::back_inserter(restFRUAreasData));
+    }
+
+    // check FRU area size
+    size_t fruAreaDataSize =
+        ((fruUpdateFieldLoc - fruAreaStart + 1) + restFRUAreaFieldsData.size());
+    size_t fruAreaAvailableSize = fruAreaSize - fruAreaDataSize;
+    if ((updatePropertyReqLen + 1) > fruAreaAvailableSize)
+    {
+
+#ifdef ENABLE_FRU_AREA_RESIZE
+        size_t newFRUAreaSize = fruAreaDataSize + updatePropertyReqLen + 1;
+        // round size to 8-byte blocks
+        newFRUAreaSize =
+            ((newFRUAreaSize - 1) / fruBlockSize + 1) * fruBlockSize;
+        size_t newFRUDataSize = fruData.size() + newFRUAreaSize - fruAreaSize;
+        fruData.resize(newFRUDataSize);
+        fruAreaSize = newFRUAreaSize;
+        fruAreaEnd = fruAreaStart + fruAreaSize;
+#else
+        std::cerr << "FRU field length: " << updatePropertyReqLen + 1
+                  << " should not be greater than available FRU area size: "
+                  << fruAreaAvailableSize << "\n";
+        return false;
+#endif // ENABLE_FRU_AREA_RESIZE
+    }
 
     // write new requested property field length and data
     constexpr uint8_t newTypeLenMask = 0xC0;
@@ -978,29 +722,61 @@ bool updateFruProperty(
               fruData.begin() + fruUpdateFieldLoc);
 
     // Copy remaining data to main fru area - post updated fru field vector
-    postFruUpdateFieldLoc = fruUpdateFieldLoc + updatePropertyReqLen;
-    size_t fruAreaEndOffset = postFruUpdateFieldLoc + postUpdatedFruData.size();
-    if (fruAreaEndOffset > fruData.size())
-    {
-        std::cerr << "Fru area offset: " << fruAreaEndOffset
-                  << "should not be greater than Fru data size: "
-                  << fruData.size() << std::endl;
-        throw std::invalid_argument(
-            "Fru area offset should not be greater than Fru data size");
-    }
-    std::copy(postUpdatedFruData.begin(), postUpdatedFruData.end(),
-              fruData.begin() + postFruUpdateFieldLoc);
+    restFRUFieldsLoc = fruUpdateFieldLoc + updatePropertyReqLen;
+    size_t fruAreaDataEnd = restFRUFieldsLoc + restFRUAreaFieldsData.size();
+    std::copy(restFRUAreaFieldsData.begin(), restFRUAreaFieldsData.end(),
+              fruData.begin() + restFRUFieldsLoc);
 
     // Update final fru with new fru area length and checksum
-    updateFruAreaLenAndChecksum(fruData, fruAreaStartOffset, fruAreaEndOffset);
+    unsigned int nextFRUAreaNewLoc = updateFRUAreaLenAndChecksum(
+        fruData, fruAreaStart, fruAreaDataEnd, fruAreaEnd);
 
+#ifdef ENABLE_FRU_AREA_RESIZE
+    ++nextFRUAreaNewLoc;
+    ssize_t nextFRUAreaOffsetDiff =
+        (nextFRUAreaNewLoc - nextFRUAreaLoc) / fruBlockSize;
+    // Append rest FRU Areas if size changed and there were other sections after
+    // updated one
+    if (nextFRUAreaOffsetDiff && nextFRUAreaLoc)
+    {
+        std::copy(restFRUAreasData.begin(), restFRUAreasData.end(),
+                  fruData.begin() + nextFRUAreaNewLoc);
+        // Update Common Header
+        for (int fruArea = fruAreaInternal; fruArea <= fruAreaMultirecord;
+             fruArea++)
+        {
+            unsigned int fruAreaOffsetField = getHeaderAreaFieldOffset(fruArea);
+            size_t curFRUAreaOffset = fruData[fruAreaOffsetField];
+            if (curFRUAreaOffset > fruAreaOffsetFieldValue)
+            {
+                fruData[fruAreaOffsetField] = static_cast<int8_t>(
+                    curFRUAreaOffset + nextFRUAreaOffsetDiff);
+            }
+        }
+        // Calculate new checksum
+        std::vector<uint8_t> headerFRUData;
+        std::copy_n(fruData.begin(), 7, std::back_inserter(headerFRUData));
+        size_t checksumVal = calculateChecksum(headerFRUData);
+        fruData[7] = static_cast<uint8_t>(checksumVal);
+        // fill zeros if FRU Area size decreased
+        if (nextFRUAreaOffsetDiff < 0)
+        {
+            std::fill(fruData.begin() + nextFRUAreaNewLoc +
+                          restFRUAreasData.size(),
+                      fruData.end(), 0);
+        }
+    }
+#else
+    // this is to avoid "unused variable" warning
+    (void)nextFRUAreaNewLoc;
+#endif // ENABLE_FRU_AREA_RESIZE
     if (fruData.empty())
     {
         return false;
     }
 
     if (!ipmbWriteFru(static_cast<uint8_t>(bus), static_cast<uint8_t>(address),
-                      fruData))
+                  fruData))
     {
         return false;
     }
@@ -1010,15 +786,17 @@ bool updateFruProperty(
     return true;
 }
 
+
+
 int main()
 {
     systemBus->request_name("xyz.openbmc_project.Ipmb.FruDevice");
 
-    // this is a map with keys of pair(bus number, address) and values of
+   // this is a map with keys of pair(bus number, address) and values of
     // the object on dbus
     boost::container::flat_map<std::pair<size_t, size_t>,
                                std::shared_ptr<sdbusplus::asio::dbus_interface>>
-        dbusInterfaceMap;
+    dbusInterfaceMap;
 
     std::shared_ptr<sdbusplus::asio::dbus_interface> iface =
         objServer.add_interface("/xyz/openbmc_project/Ipmb/FruDevice",
@@ -1027,7 +805,7 @@ int main()
     iface->register_method("ReScan",
                            [&]() { ipmbScanDevices(dbusInterfaceMap); });
 
-    iface->register_method("GetRawFru", getFruInfo);
+    iface->register_method("GetRawFru", getFRUInfo);
 
     iface->register_method("WriteFru", [&](const uint8_t bus,
                                            const uint8_t address,
@@ -1048,3 +826,4 @@ int main()
     io.run();
     return 0;
 }
+
