@@ -13,10 +13,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 */
-/// \file FruDevice.cpp
+/// \file IpmbFruDevice.cpp
 
-#include "Utils.hpp"
 #include "Common.hpp"
+#include "Utils.hpp"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -55,7 +55,6 @@ extern "C"
 #include <i2c/smbus.h>
 #include <linux/i2c-dev.h>
 }
-
 
 std::vector<uint8_t> ipmbAddress;
 
@@ -107,11 +106,17 @@ void AddFRUObjectToDbus(
     uint32_t bus, uint32_t address)
 {
     boost::container::flat_map<std::string, std::string> formattedFRU;
-    if (!formatFRU(device, formattedFRU))
+    resCodes res = formatFRU(device, formattedFRU);
+    if (res == resCodes::resErr)
     {
-        std::cerr << "failed to format fru for device at bus " << bus
+        std::cerr << "failed to parse FRU for device at bus " << bus
                   << " address " << address << "\n";
         return;
+    }
+    else if (res == resCodes::resWarn)
+    {
+        std::cerr << "there were warnings while parsing FRU for device at bus "
+                  << bus << " address " << address << "\n";
     }
 
     auto productNameFind = formattedFRU.find("BOARD_PRODUCT_NAME");
@@ -136,13 +141,17 @@ void AddFRUObjectToDbus(
         UNKNOWN_BUS_OBJECT_COUNT++;
     }
 
-    productName = "/xyz/openbmc_project/Ipmb/FruDevice/" + productName;
+    if(bus == 0)
+    {
+        productName = "/xyz/openbmc_project/Ipmb/FruDevice/" + productName + "_0";
+    }   
     // avoid duplicates by checking to see if on a mux
     if (bus > 0)
     {
-        int highest = -1;
+        int highest = 0;
         bool found = false;
 
+        productName = "/xyz/openbmc_project/Ipmb/FruDevice/" + productName;
         for (auto const& busIface : dbusInterfaceMap)
         {
             std::string path = busIface.second->get_object_path();
@@ -181,20 +190,20 @@ void AddFRUObjectToDbus(
 
         if (found)
         {
-            // We found something with the same name.  If highest was still -1,
-            // it means this new entry will be _0.
+            // We found something with the same name.  If highest was still 0,
+            // it means this new entry will be _1.
             productName += "_";
             productName += std::to_string(++highest);
         }
     }
 
     std::shared_ptr<sdbusplus::asio::dbus_interface> iface =
-        objServer.add_interface(productName, "xyz.openbmc_project.Ipmb.FruDevice");
+        objServer.add_interface(productName,
+                                "xyz.openbmc_project.Ipmb.FruDevice");
     dbusInterfaceMap[std::pair<size_t, size_t>(bus, address)] = iface;
 
     for (auto& property : formattedFRU)
     {
-
         std::regex_replace(property.second.begin(), property.second.begin(),
                            property.second.end(), NON_ASCII_REGEX, "_");
         if (property.second.empty() && property.first != "PRODUCT_ASSET_TAG")
@@ -245,35 +254,37 @@ void AddFRUObjectToDbus(
     iface->initialize();
 }
 
-void ipmbWrite(uint8_t ipmbAddress, uint8_t offset, const std::vector<uint8_t>& fru)
-{   
-    uint8_t cmd = 0x12;   
-    uint8_t netFn = 0xa; 
+void ipmbWrite(uint8_t ipmbAddress, uint8_t offset,
+               const std::vector<uint8_t>& fru)
+{
+    uint8_t cmd = 0x12;
+    uint8_t netFn = 0xa;
     uint8_t lun = 0;
     std::vector<uint8_t> cmdData;
     std::vector<uint8_t> respData;
 
-    cmdData.emplace_back(fru.size()+3); 
+    cmdData.emplace_back(fru.size() + 3);
     cmdData.emplace_back(0);
     cmdData.emplace_back(offset);
     cmdData.emplace_back(0);
     cmdData.emplace_back(fru.size());
-    
-    for(int iter=0; iter<fru.size(); iter++)
+
+    for (uint8_t iter= 0; iter<fru.size(); iter++)
     {
-       cmdData.emplace_back(fru.at(iter));
-    } 
-        
-    auto method = systemBus->new_method_call("xyz.openbmc_project.Ipmi.Channel.Ipmb",
-                                       "/xyz/openbmc_project/Ipmi/Channel/Ipmb",
-                                       "org.openbmc.Ipmb", "sendRequest");
+        cmdData.emplace_back(fru.at(iter));
+    }
+
+    auto method =
+        systemBus->new_method_call("xyz.openbmc_project.Ipmi.Channel.Ipmb",
+                                   "/xyz/openbmc_project/Ipmi/Channel/Ipmb",
+                                   "org.openbmc.Ipmb", "sendRequest");
 
     method.append(ipmbAddress, netFn, lun, cmd, cmdData);
 
     auto reply = systemBus->call(method);
     if (reply.is_method_error())
     {
-        std::cerr<< "Error reading from Ipmb";
+        std::cerr << "Error reading from Ipmb";
         return;
     }
 
@@ -282,12 +293,11 @@ void ipmbWrite(uint8_t ipmbAddress, uint8_t offset, const std::vector<uint8_t>& 
 
     respData =
         std::move(std::get<std::remove_reference_t<decltype(respData)>>(resp));
-       
-    return;    
 
+    return;
 }
 
-bool ipmbWriteFru(uint8_t bus, uint8_t address, const std::vector<uint8_t>& fru)
+bool ipmbWriteFru(uint8_t bus, const std::vector<uint8_t>& fru)
 {
     uint8_t offset = 0;
 
@@ -297,88 +307,90 @@ bool ipmbWriteFru(uint8_t bus, uint8_t address, const std::vector<uint8_t>& fru)
         std::cerr << "Invalid fru.size() during writeFru\n";
         return false;
     }
+
     // verify legal fru by running it through fru parsing logic
-    if (!formatFRU(fru, tmp))
+    if (formatFRU(fru, tmp) != resCodes::resOK)
     {
-        std::cerr << "Invalid fru format during writeFru\n";
+        std::cerr << "Invalid fru format during writeFRU\n";
         return false;
     }
- 
+
     ipmbWrite(ipmbAddress.at(bus), offset, fru);
 
-    return true;            
+    return true;
 }
 
 void findIpmbDev(std::vector<uint8_t>& ipmbAddr)
 {
-    constexpr const char *configFilePath =
+    constexpr const char* configFilePath =
         "/usr/share/ipmbbridge/ipmb-channels.json";
 
     uint8_t devIndex = 0;
-    uint8_t type = 0; 
+    uint8_t type = 0;
 
     std::ifstream configFile(configFilePath);
     if (!configFile.is_open())
     {
-        std::cerr<<"findIpmbDev : Cannot open config path \n";
+        std::cerr << "findIpmbDev : Cannot open config path \n";
         return;
     }
     try
     {
         auto data = nlohmann::json::parse(configFile, nullptr);
-        for (const auto &channelConfig : data["channels"])
-        {  
-            const std::string &typeConfig = channelConfig["type"];
+        for (const auto& channelConfig : data["channels"])
+        {
+            const std::string& typeConfig = channelConfig["type"];
             devIndex = (static_cast<uint8_t>(channelConfig["devIndex"]));
 
-            if(typeConfig.compare("me") == 0)
+            if (typeConfig.compare("me") == 0)
             {
-               type = 1;
+                type = 1;
             }
-            else if(typeConfig.compare("ipmb") == 0)
+            else if (typeConfig.compare("ipmb") == 0)
             {
-               type = 0;
+                type = 0;
             }
             else
             {
-               std::cerr<<"findIpmbDev : Invalid type in json\n";
-               return;  
+                std::cerr << "findIpmbDev : Invalid type in json\n";
+                return;
             }
-             
+
             ipmbAddr.push_back(((devIndex << 2) | type));
         }
     }
-    catch (nlohmann::json::exception &e)
+    catch (nlohmann::json::exception& e)
     {
-        std::cerr<<"findIpmbDev : Error parsing config file \n";
+        std::cerr << "findIpmbDev : Error parsing config file \n";
         return;
     }
-    catch (std::out_of_range &e)
+    catch (std::out_of_range& e)
     {
-         std::cerr<<"findIpmbDev : Error invalid type \n";
+        std::cerr << "findIpmbDev : Error invalid type \n";
         return;
     }
-} 
+}
 
-void getAreaInfo(uint8_t ipmbAddress, uint8_t &compCode, uint16_t &readLen)
+void getAreaInfo(uint8_t ipmbAddress, uint8_t& compCode, uint16_t& readLen)
 {
-    uint8_t cmd = 0x10;   
-    uint8_t netFn = 0xa; 
+    uint8_t cmd = 0x10;
+    uint8_t netFn = 0xa;
     static const uint8_t lun = 0;
-    
+
     std::vector<uint8_t> cmdData{0};
     std::vector<uint8_t> respData;
 
-    auto method = systemBus->new_method_call("xyz.openbmc_project.Ipmi.Channel.Ipmb",
-                                       "/xyz/openbmc_project/Ipmi/Channel/Ipmb",
-                                       "org.openbmc.Ipmb", "sendRequest");
+    auto method =
+        systemBus->new_method_call("xyz.openbmc_project.Ipmi.Channel.Ipmb",
+                                   "/xyz/openbmc_project/Ipmi/Channel/Ipmb",
+                                   "org.openbmc.Ipmb", "sendRequest");
 
     method.append(ipmbAddress, netFn, lun, cmd, cmdData);
 
     auto reply = systemBus->call(method);
     if (reply.is_method_error())
     {
-        std::cerr<< "Error reading from Ipmb";
+        std::cerr << "Error reading from Ipmb";
         return;
     }
 
@@ -386,41 +398,42 @@ void getAreaInfo(uint8_t ipmbAddress, uint8_t &compCode, uint16_t &readLen)
     reply.read(resp);
 
     // Assign Response completion code
-    compCode  = std::get<4>(resp);
+    compCode = std::get<4>(resp);
 
     std::vector<uint8_t> data;
     data = std::get<5>(resp);
 
-    readLen = ((data.at(1) << 8) | data.at(0)); 
+    readLen = ((data.at(1) << 8) | data.at(0));
 
     respData =
         std::move(std::get<std::remove_reference_t<decltype(respData)>>(resp));
 }
 
-
-void ipmbReadFru(uint8_t ipmbAddress, uint8_t offset, std::vector<uint8_t> &fruResponse)
-{ 
-    uint8_t cmd = 0x11;   
-    uint8_t netFn = 0xa; 
+void ipmbReadFru(uint8_t ipmbAddress, uint8_t offset,
+                 std::vector<uint8_t>& fruResponse)
+{
+    uint8_t cmd = 0x11;
+    uint8_t netFn = 0xa;
     uint8_t lun = 0;
     std::vector<uint8_t> cmdData;
     std::vector<uint8_t> respData;
- 
+
     cmdData.emplace_back(0);
     cmdData.emplace_back(offset);
     cmdData.emplace_back(0);
     cmdData.emplace_back(49);
 
-    auto method = systemBus->new_method_call("xyz.openbmc_project.Ipmi.Channel.Ipmb",
-                                       "/xyz/openbmc_project/Ipmi/Channel/Ipmb",
-                                       "org.openbmc.Ipmb", "sendRequest");
+    auto method =
+        systemBus->new_method_call("xyz.openbmc_project.Ipmi.Channel.Ipmb",
+                                   "/xyz/openbmc_project/Ipmi/Channel/Ipmb",
+                                   "org.openbmc.Ipmb", "sendRequest");
 
     method.append(ipmbAddress, netFn, lun, cmd, cmdData);
 
     auto reply = systemBus->call(method);
     if (reply.is_method_error())
     {
-        std::cerr<< "Error reading from Ipmb";
+        std::cerr << "Error reading from Ipmb";
         return;
     }
 
@@ -429,27 +442,28 @@ void ipmbReadFru(uint8_t ipmbAddress, uint8_t offset, std::vector<uint8_t> &fruR
 
     respData =
         std::move(std::get<std::remove_reference_t<decltype(respData)>>(resp));
-       
+
     respData.erase(respData.begin());
- 
-    for(int i=0; i<respData.size(); i++)
+
+    for (uint8_t i = 0; i < respData.size(); i++)
     {
         fruResponse.push_back(respData.at(i));
-    } 
-     
-    return;    
+    }
+
+    return;
 }
 
-void ipmbScanDevices(boost::container::flat_map<
+void ipmbScanDevices(
+    boost::container::flat_map<
         std::pair<size_t, size_t>,
         std::shared_ptr<sdbusplus::asio::dbus_interface>>& dbusInterfaceMap)
-{ 
+{
     std::vector<uint8_t> fruResponse;
     boost::container::flat_map<int, std::vector<uint8_t>> hostDev;
 
     uint8_t compCode = 0;
     uint16_t readLen = 0;
-    int iter = 0;
+    uint8_t iter = 0;
     int offset = 0;
     int count = 0;
 
@@ -470,38 +484,37 @@ void ipmbScanDevices(boost::container::flat_map<
     printf("Size = %d\n", ipmbAddress.size());
     std::cout.flush();
 
-    for(iter=0; iter<ipmbAddress.size(); iter++)
+    for (iter = 0; iter < ipmbAddress.size(); iter++)
     {
-       // Add code for Get FRU Area Info 
-       getAreaInfo(ipmbAddress.at(iter), compCode, readLen);
+        // Add code for Get FRU Area Info
+        getAreaInfo(ipmbAddress.at(iter), compCode, readLen);
 
-       if(compCode == 0)
-       {
-          while(offset < readLen)
-          {
-            ipmbReadFru(ipmbAddress.at(iter), offset, fruResponse);
-            offset = offset + 49;
-          }
-       }
+        if (compCode == 0)
+        {
+            while (offset < readLen)
+            {
+                ipmbReadFru(ipmbAddress.at(iter), offset, fruResponse);
+                offset = offset + 49;
+            }
+        }
 
-       hostDev[0] = fruResponse;
-       busMap[count++] = std::make_shared<DeviceMap>(hostDev);
+        hostDev[0] = fruResponse;
+        busMap[count++] = std::make_shared<DeviceMap>(hostDev);
 
-       offset = 0; 
-       readLen = 0;
-       fruResponse.clear();
+        offset = 0;
+        readLen = 0;
+        fruResponse.clear();
     }
-    
+
     for (auto& devicemap : busMap)
     {
         for (auto& device : *devicemap.second)
-        { 
-                AddFRUObjectToDbus(device.second, dbusInterfaceMap,
-                                           devicemap.first, device.first);
+        {
+            AddFRUObjectToDbus(device.second, dbusInterfaceMap, devicemap.first,
+                               device.first);
         }
-    } 
+    }
 }
-
 
 // Details with example of Asset Tag Update
 // To find location of Product Info Area asset tag as per FRU specification
@@ -775,8 +788,7 @@ bool updateFRUProperty(
         return false;
     }
 
-    if (!ipmbWriteFru(static_cast<uint8_t>(bus), static_cast<uint8_t>(address),
-                  fruData))
+    if (!ipmbWriteFru(static_cast<uint8_t>(bus), fruData))
     {
         return false;
     }
@@ -786,17 +798,15 @@ bool updateFRUProperty(
     return true;
 }
 
-
-
 int main()
 {
     systemBus->request_name("xyz.openbmc_project.Ipmb.FruDevice");
 
-   // this is a map with keys of pair(bus number, address) and values of
+    // this is a map with keys of pair(bus number, address) and values of
     // the object on dbus
     boost::container::flat_map<std::pair<size_t, size_t>,
                                std::shared_ptr<sdbusplus::asio::dbus_interface>>
-    dbusInterfaceMap;
+        dbusInterfaceMap;
 
     std::shared_ptr<sdbusplus::asio::dbus_interface> iface =
         objServer.add_interface("/xyz/openbmc_project/Ipmb/FruDevice",
@@ -808,9 +818,8 @@ int main()
     iface->register_method("GetRawFru", getFRUInfo);
 
     iface->register_method("WriteFru", [&](const uint8_t bus,
-                                           const uint8_t address,
                                            const std::vector<uint8_t>& data) {
-        if (!ipmbWriteFru(bus, address, data))
+        if (!ipmbWriteFru(bus, data))
         {
             throw std::invalid_argument("Invalid Arguments.");
             return;
@@ -826,4 +835,3 @@ int main()
     io.run();
     return 0;
 }
-

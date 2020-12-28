@@ -15,8 +15,8 @@
 */
 /// \file FruDevice.cpp
 
-#include "Utils.hpp"
 #include "Common.hpp"
+#include "Utils.hpp"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -133,7 +133,7 @@ std::vector<uint8_t> readFRUContents(int flag, int file, uint16_t address,
     device.insert(device.end(), blockData.begin(), blockData.begin() + 8);
 
     bool hasMultiRecords = false;
-    ssize_t fruLength = fruBlockSize; // At least FRU header is present
+    size_t fruLength = fruBlockSize; // At least FRU header is present
     for (fruAreas area = fruAreas::fruAreaInternal;
          area <= fruAreas::fruAreaMultirecord; ++area)
     {
@@ -207,14 +207,14 @@ std::vector<uint8_t> readFRUContents(int flag, int file, uint16_t address,
     }
 
     // You already copied these first 8 bytes (the ipmi fru header size)
-    fruLength -= fruBlockSize;
+    fruLength -= std::min(fruBlockSize, fruLength);
 
     int readOffset = fruBlockSize;
 
     while (fruLength > 0)
     {
-        int requestLength =
-            std::min(I2C_SMBUS_BLOCK_MAX, static_cast<int>(fruLength));
+        size_t requestLength =
+            std::min(static_cast<size_t>(I2C_SMBUS_BLOCK_MAX), fruLength);
 
         if (readBlock(flag, file, address, static_cast<uint16_t>(readOffset),
                       static_cast<uint8_t>(requestLength),
@@ -228,7 +228,7 @@ std::vector<uint8_t> readFRUContents(int flag, int file, uint16_t address,
                       blockData.begin() + requestLength);
 
         readOffset += requestLength;
-        fruLength -= requestLength;
+        fruLength -= std::min(requestLength, fruLength);
     }
 
     return device;
@@ -567,7 +567,7 @@ int getBusFRUs(int file, int first, int last, int bus,
             // Set slave address
             if (ioctl(file, I2C_SLAVE, ii) < 0)
             {
-                std::cerr << "device at bus " << bus << " register " << ii
+                std::cerr << "device at bus " << bus << " address " << ii
                           << " busy\n";
                 continue;
             }
@@ -818,11 +818,17 @@ void AddFRUObjectToDbus(
     uint32_t bus, uint32_t address)
 {
     boost::container::flat_map<std::string, std::string> formattedFRU;
-    if (!formatFRU(device, formattedFRU))
+    resCodes res = formatFRU(device, formattedFRU);
+    if (res == resCodes::resErr)
     {
-        std::cerr << "failed to format fru for device at bus " << bus
+        std::cerr << "failed to parse FRU for device at bus " << bus
                   << " address " << address << "\n";
         return;
+    }
+    else if (res == resCodes::resWarn)
+    {
+        std::cerr << "there were warnings while parsing FRU for device at bus "
+                  << bus << " address " << address << "\n";
     }
 
     auto productNameFind = formattedFRU.find("BOARD_PRODUCT_NAME");
@@ -984,12 +990,14 @@ bool writeFRU(uint8_t bus, uint8_t address, const std::vector<uint8_t>& fru)
         std::cerr << "Invalid fru.size() during writeFRU\n";
         return false;
     }
+
     // verify legal fru by running it through fru parsing logic
-    if (!formatFRU(fru, tmp))
+    if (formatFRU(fru, tmp) != resCodes::resOK)
     {
         std::cerr << "Invalid fru format during writeFRU\n";
         return false;
     }
+    
     // baseboard fru
     if (bus == 0 && address == 0)
     {

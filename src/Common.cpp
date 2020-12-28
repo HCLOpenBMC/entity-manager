@@ -14,8 +14,9 @@
 // limitations under the License.
 */
 
-#include "Utils.hpp"
 #include "Common.hpp"
+
+#include "Utils.hpp"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -49,13 +50,6 @@
 #include <variant>
 #include <vector>
 
-
-bool isMuxBus(size_t bus)
-{
-    return is_symlink(std::filesystem::path(
-        "/sys/bus/i2c/devices/i2c-" + std::to_string(bus) + "/mux_device"));
-}
-
 const std::tm intelEpoch(void)
 {
     std::tm val = {};
@@ -81,6 +75,7 @@ enum FRUDataEncoding
     sixBitASCII = 0x2,
     languageDependent = 0x3,
 };
+
 /* Decode FRU data into a std::string, given an input iterator and end. If the
  * state returned is fruDataOk, then the resulting string is the decoded FRU
  * data. The input iterator is advanced past the data consumed.
@@ -185,13 +180,14 @@ void checkLang(uint8_t lang)
     }
 }
 
-bool formatFRU(const std::vector<uint8_t>& fruBytes,
-               boost::container::flat_map<std::string, std::string>& result)
+resCodes formatFRU(const std::vector<uint8_t>& fruBytes,
+                   boost::container::flat_map<std::string, std::string>& result)
 {
+    resCodes ret = resCodes::resOK;
     if (fruBytes.size() <= fruBlockSize)
     {
         std::cerr << "Error: trying to parse empty FRU \n";
-        return false;
+        return resCodes::resErr;
     }
     result["Common_Format_Version"] =
         std::to_string(static_cast<int>(*fruBytes.begin()));
@@ -214,13 +210,13 @@ bool formatFRU(const std::vector<uint8_t>& fruBytes,
         if (fruBytesIter + fruBlockSize >= fruBytes.end())
         {
             std::cerr << "Not enough data to parse \n";
-            return false;
+            return resCodes::resErr;
         }
         // check for format version 1
         if (*fruBytesIter != 0x01)
         {
             std::cerr << "Unexpected version " << *fruBytesIter << "\n";
-            return false;
+            return resCodes::resErr;
         }
         ++fruBytesIter;
         uint8_t fruAreaSize = *fruBytesIter * fruBlockSize;
@@ -228,12 +224,19 @@ bool formatFRU(const std::vector<uint8_t>& fruBytes,
             fruBytes.begin() + offset + fruAreaSize - 1;
         ++fruBytesIter;
 
-        if (calculateChecksum(fruBytes.begin() + offset, fruBytesIterEndArea) !=
-            *fruBytesIterEndArea)
+        uint8_t fruComputedChecksum =
+            calculateChecksum(fruBytes.begin() + offset, fruBytesIterEndArea);
+        if (fruComputedChecksum != *fruBytesIterEndArea)
         {
-            std::cerr << "Checksum error in FRU area " << getFruAreaName(area)
-                      << "\n";
-            return false;
+            std::stringstream ss;
+            ss << std::hex << std::setfill('0');
+            ss << "Checksum error in FRU area " << getFruAreaName(area) << "\n";
+            ss << "\tComputed checksum: 0x" << std::setw(2)
+               << static_cast<int>(fruComputedChecksum) << "\n";
+            ss << "\tThe read checksum: 0x" << std::setw(2)
+               << static_cast<int>(*fruBytesIterEndArea) << "\n";
+            std::cerr << ss.str();
+            ret = resCodes::resWarn;
         }
 
         switch (area)
@@ -269,7 +272,7 @@ bool formatFRU(const std::vector<uint8_t>& fruBytes,
                 if (bytes == 0)
                 {
                     std::cerr << "invalid time string encountered\n";
-                    return false;
+                    return resCodes::resErr;
                 }
 
                 result["BOARD_MANUFACTURE_DATE"] = std::string(timeString);
@@ -291,7 +294,7 @@ bool formatFRU(const std::vector<uint8_t>& fruBytes,
             {
                 std::cerr << "Internal error: unexpected FRU area index: "
                           << static_cast<int>(area) << " \n";
-                return false;
+                return resCodes::resErr;
             }
         }
         size_t fieldIndex = 0;
@@ -329,12 +332,13 @@ bool formatFRU(const std::vector<uint8_t>& fruBytes,
             else if (state == DecodeState::err)
             {
                 std::cerr << "Error while parsing " << name << "\n";
+                ret = resCodes::resWarn;
                 // Cancel decoding if failed to parse any of mandatory
                 // fields
                 if (fieldIndex < fruAreaFieldNames->size())
                 {
                     std::cerr << "Failed to parse mandatory field \n";
-                    return false;
+                    return resCodes::resErr;
                 }
             }
             else
@@ -344,6 +348,7 @@ bool formatFRU(const std::vector<uint8_t>& fruBytes,
                     std::cerr << "Mandatory fields absent in FRU area "
                               << getFruAreaName(area) << " after " << name
                               << "\n";
+                    ret = resCodes::resWarn;
                 }
             }
         } while (state == DecodeState::ok);
@@ -354,14 +359,20 @@ bool formatFRU(const std::vector<uint8_t>& fruBytes,
             {
                 std::cerr << "Non-zero byte after EndOfFields in FRU area "
                           << getFruAreaName(area) << "\n";
+                ret = resCodes::resWarn;
                 break;
             }
         }
     }
 
-    return true;
+    return ret;
 }
 
+bool isMuxBus(size_t bus)
+{
+    return is_symlink(std::filesystem::path(
+        "/sys/bus/i2c/devices/i2c-" + std::to_string(bus) + "/mux_device"));
+}
 
 // Calculate new checksum for fru info area
 uint8_t calculateChecksum(std::vector<uint8_t>::const_iterator iter,
@@ -373,6 +384,7 @@ uint8_t calculateChecksum(std::vector<uint8_t>::const_iterator iter,
     int checksum = (checksumMod - sum) & modVal;
     return static_cast<uint8_t>(checksum);
 }
+
 uint8_t calculateChecksum(std::vector<uint8_t>& fruAreaData)
 {
     return calculateChecksum(fruAreaData.begin(), fruAreaData.end());
@@ -382,9 +394,9 @@ uint8_t calculateChecksum(std::vector<uint8_t>& fruAreaData)
 // Update checksum at new checksum location
 // Return the offset of the area checksum byte
 unsigned int updateFRUAreaLenAndChecksum(std::vector<uint8_t>& fruData,
-                                                size_t fruAreaStart,
-                                                size_t fruAreaEndOfFieldsOffset,
-                                                size_t fruAreaEndOffset)
+                                         size_t fruAreaStart,
+                                         size_t fruAreaEndOfFieldsOffset,
+                                         size_t fruAreaEndOffset)
 {
     size_t traverseFRUAreaIndex = fruAreaEndOfFieldsOffset - fruAreaStart;
 
@@ -432,4 +444,3 @@ ssize_t getFieldLength(uint8_t fruFieldTypeLenValue)
         return fruFieldTypeLenValue & typeLenMask;
     }
 }
-
