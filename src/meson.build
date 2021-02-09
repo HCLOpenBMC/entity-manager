@@ -27,6 +27,7 @@ if get_option('fru-device')
         'FruDevice.cpp',
         'Utils.cpp',
         'Common.cpp',
+        'FruUtils.cpp',
         cpp_args: cpp_args_fd,
         dependencies: [
             boost,

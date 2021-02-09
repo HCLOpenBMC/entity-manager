@@ -27,33 +27,11 @@
             "I2CAddress": 107,
             "I2CBus": 3,
             "NamedPresenceGpio": "presence-ps3"
-        },
-        {
-            "Address": "0x48",
-            "Bus": 7,
-            "Name": "Ambient 0 Temp",
-            "Type": "TMP75"
-        },
-        {
-            "Address": "0x48",
-            "Bus": 8,
-            "Name": "PCIE 0 Temp",
-            "Type": "TMP75"
-        },
-        {
-            "Address": "0x4A",
-            "Bus": 8,
-            "Name": "PCIE 1 Temp",
-            "Type": "TMP75"
         }
     ],
-    "Name": "Nisqually Backplane",
+    "Name": "Bellavista Backplane",
     "Probe": [
-        "com.ibm.ipzvpd.VINI({'CC': [50, 69, 50, 68]})",
-        "OR",
-        "com.ibm.ipzvpd.VINI({'CC': [50, 69, 50, 70]})",
-        "OR",
-        "com.ibm.ipzvpd.VINI({'CC': [50, 69, 52, 48]})"
+        "com.ibm.ipzvpd.VINI({'CC': [50, 69, 51, 51]})"
     ],
     "Type": "Board"
 }
