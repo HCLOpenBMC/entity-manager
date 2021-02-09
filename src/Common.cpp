@@ -16,39 +16,9 @@
 
 #include "Common.hpp"
 
-#include "Utils.hpp"
-
-#include <errno.h>
-#include <fcntl.h>
-#include <sys/inotify.h>
-#include <sys/ioctl.h>
-
-#include <boost/algorithm/string/predicate.hpp>
-#include <boost/asio/deadline_timer.hpp>
-#include <boost/asio/io_service.hpp>
-#include <boost/container/flat_map.hpp>
-#include <nlohmann/json.hpp>
-#include <sdbusplus/asio/connection.hpp>
-#include <sdbusplus/asio/object_server.hpp>
-
-#include <array>
-#include <chrono>
-#include <ctime>
 #include <filesystem>
-#include <fstream>
-#include <functional>
-#include <future>
-#include <iomanip>
 #include <iostream>
-#include <limits>
-#include <regex>
-#include <set>
-#include <sstream>
-#include <string>
-#include <thread>
-#include <utility>
-#include <variant>
-#include <vector>
+#include<numeric>
 
 const std::tm intelEpoch(void)
 {

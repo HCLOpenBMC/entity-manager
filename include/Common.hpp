@@ -17,18 +17,14 @@
 
 #pragma once
 
-#include "Utils.hpp"
 
-#include <systemd/sd-journal.h>
 
 #include <boost/container/flat_map.hpp>
-#include <nlohmann/json.hpp>
-#include <sdbusplus/asio/object_server.hpp>
 
-#include <iostream>
-#include <list>
 #include <regex>
 #include <string>
+#include <vector>
+#include <utility>
 
 constexpr size_t fruBlockSize = 8;
 
