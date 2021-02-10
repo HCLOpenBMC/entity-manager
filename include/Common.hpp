@@ -18,6 +18,7 @@
 #pragma once
 
 
+#include "FruUtils.hpp"
 
 #include <boost/container/flat_map.hpp>
 
@@ -26,7 +27,6 @@
 #include <vector>
 #include <utility>
 
-constexpr size_t fruBlockSize = 8;
 
 enum class DecodeState
 {
@@ -42,14 +42,6 @@ enum class resCodes
     resErr
 };
 
-enum class fruAreas
-{
-    fruAreaInternal = 0,
-    fruAreaChassis,
-    fruAreaBoard,
-    fruAreaProduct,
-    fruAreaMultirecord
-};
 
 const std::vector<std::string> FRU_AREA_NAMES = {"INTERNAL", "CHASSIS", "BOARD",
                                                  "PRODUCT", "MULTIRECORD"};
@@ -67,17 +59,6 @@ const std::vector<std::string> PRODUCT_FRU_AREAS = {
     "SERIAL_NUMBER", "ASSET_TAG",    "FRU_VERSION_ID"};
 
 const std::string FRU_CUSTOM_FIELD_NAME = "INFO_AM";
-
-inline fruAreas operator++(fruAreas& x)
-{
-    return x = static_cast<fruAreas>(std::underlying_type<fruAreas>::type(x) +
-                                     1);
-}
-
-inline unsigned int getHeaderAreaFieldOffset(fruAreas area)
-{
-    return static_cast<unsigned int>(area) + 1;
-}
 
 inline const std::string& getFruAreaName(fruAreas area)
 {

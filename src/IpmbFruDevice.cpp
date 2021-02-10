@@ -16,6 +16,7 @@
 /// \file IpmbFruDevice.cpp
 
 #include "Common.hpp"
+#include "FruUtils.hpp"
 #include "Utils.hpp"
 
 #include <errno.h>

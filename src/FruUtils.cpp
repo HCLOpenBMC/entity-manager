@@ -15,6 +15,7 @@
 */
 /// \file FruUtils.cpp
 
+#include "Common.hpp"
 #include "FruUtils.hpp"
 
 #include <array>
@@ -32,6 +33,11 @@ extern "C"
 
 static constexpr bool DEBUG = false;
 constexpr size_t fruVersion = 1; // Current FRU spec version number is 1
+
+unsigned int getHeaderAreaFieldOffset(fruAreas area)
+{
+    return static_cast<unsigned int>(area) + 1;
+}
 
 bool validateHeader(const std::array<uint8_t, I2C_SMBUS_BLOCK_MAX>& blockData)
 {
@@ -222,7 +228,3 @@ std::vector<uint8_t> readFRUContents(int flag, int file, uint16_t address,
     return device;
 }
 
-unsigned int getHeaderAreaFieldOffset(fruAreas area)
-{
-    return static_cast<unsigned int>(area) + 1;
-}

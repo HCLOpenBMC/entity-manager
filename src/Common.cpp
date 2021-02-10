@@ -14,6 +14,7 @@
 // limitations under the License.
 */
 
+#include "FruUtils.hpp"
 #include "Common.hpp"
 
 #include <filesystem>
@@ -46,16 +47,10 @@ enum FRUDataEncoding
     languageDependent = 0x3,
 };
 
-/* Decode FRU data into a std::string, given an input iterator and end. If the
- * state returned is fruDataOk, then the resulting string is the decoded FRU
- * data. The input iterator is advanced past the data consumed.
- *
- * On fruDataErr, we have lost synchronisation with the length bytes, so the
- * iterator is no longer usable.
- */
-std::pair<DecodeState, std::string>
+static std::pair<DecodeState, std::string>
     decodeFRUData(std::vector<uint8_t>::const_iterator& iter,
-                  const std::vector<uint8_t>::const_iterator& end)
+                  const std::vector<uint8_t>::const_iterator& end,
+                  bool isLangEng)
 {
     std::string value;
     unsigned int i;
@@ -104,6 +99,17 @@ std::pair<DecodeState, std::string>
             /* For language-code dependent encodings, assume 8-bit ASCII */
             value = std::string(iter, iter + len);
             iter += len;
+
+            /* English text is encoded in 8-bit ASCII + Latin 1. All other
+             * languages are required to use 2-byte unicode. FruDevice does not
+             * handle unicode.
+             */
+            if (!isLangEng)
+            {
+                std::cerr << "Error: Non english string is not supported \n";
+                return make_pair(DecodeState::err, value);
+            }
+
             break;
 
         case FRUDataEncoding::bcdPlus:
@@ -139,6 +145,107 @@ std::pair<DecodeState, std::string>
     return make_pair(DecodeState::ok, value);
 }
 
+
+static bool checkLangEng(uint8_t lang)
+{
+    // If Lang is not English then the encoding is defined as 2-byte UNICODE,
+    // but we don't support that.
+    if (lang && lang != 25)
+    {
+        std::cerr << "Warning: languages other than English is not "
+                     "supported\n";
+        // Return language flag as non english
+        return false;
+    }
+    else
+    {
+        return true;
+    }
+}
+
+/* This function verifies for other offsets to check if they are not
+ * falling under other field area
+ *
+ * fruBytes:    Start of Fru data
+ * currentArea: Index of current area offset to be compared against all area
+ *              offset and it is a multiple of 8 bytes as per specification
+ * len:         Length of current area space and it is a multiple of 8 bytes
+ *              as per specification
+ */
+static bool verifyOffset(const std::vector<uint8_t>& fruBytes,
+                         fruAreas currentArea, uint8_t len)
+{
+
+    unsigned int fruBytesSize = fruBytes.size();
+
+    // check if Fru data has at least 8 byte header
+    if (fruBytesSize <= fruBlockSize)
+    {
+        std::cerr << "Error: trying to parse empty FRU\n";
+        return false;
+    }
+
+    // Check range of passed currentArea value
+    if (currentArea > fruAreas::fruAreaMultirecord)
+    {
+        std::cerr << "Error: Fru area is out of range\n";
+        return false;
+    }
+
+    unsigned int currentAreaIndex = getHeaderAreaFieldOffset(currentArea);
+    if (currentAreaIndex > fruBytesSize)
+    {
+        std::cerr << "Error: Fru area index is out of range\n";
+        return false;
+    }
+
+    unsigned int start = fruBytes[currentAreaIndex];
+    unsigned int end = start + len;
+
+    /* Verify each offset within the range of start and end */
+    for (fruAreas area = fruAreas::fruAreaInternal;
+         area <= fruAreas::fruAreaMultirecord; ++area)
+    {    
+        // skip the current offset
+        if (area == currentArea)
+        {
+            continue;
+        }
+
+        unsigned int areaIndex = getHeaderAreaFieldOffset(area);
+        if (areaIndex > fruBytesSize)
+        {
+            std::cerr << "Error: Fru area index is out of range\n";
+            return false;
+        }
+
+        unsigned int areaOffset = fruBytes[areaIndex];
+        // if areaOffset is 0 means this area is not available so skip
+        if (areaOffset == 0)
+        {
+            continue;
+        }
+
+        // check for overlapping of current offset with given areaoffset
+        if (areaOffset == start || (areaOffset > start && areaOffset < end))
+        {
+            std::cerr << getFruAreaName(currentArea)
+                      << " offset is overlapping with " << getFruAreaName(area)
+                      << " offset\n";
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Decode FRU data into a std::string, given an input iterator and end. If the
+ * state returned is fruDataOk, then the resulting string is the decoded FRU
+ * data. The input iterator is advanced past the data consumed.
+ *
+ * On fruDataErr, we have lost synchronisation with the length bytes, so the
+ * iterator is no longer usable.
+ */
+
 void checkLang(uint8_t lang)
 {
     // If Lang is not English then the encoding is defined as 2-byte UNICODE,
@@ -149,6 +256,7 @@ void checkLang(uint8_t lang)
                      "supported \n";
     }
 }
+
 
 resCodes formatFRU(const std::vector<uint8_t>& fruBytes,
                    boost::container::flat_map<std::string, std::string>& result)
@@ -189,6 +297,15 @@ resCodes formatFRU(const std::vector<uint8_t>& fruBytes,
             return resCodes::resErr;
         }
         ++fruBytesIter;
+
+        /* Verify other area offset for overlap with current area by passing
+         * length of current area offset pointed by *fruBytesIter
+         */
+        if (!verifyOffset(fruBytes, area, *fruBytesIter))
+        {
+            return resCodes::resErr;
+        }
+
         uint8_t fruAreaSize = *fruBytesIter * fruBlockSize;
         std::vector<uint8_t>::const_iterator fruBytesIterEndArea =
             fruBytes.begin() + offset + fruAreaSize - 1;
@@ -209,6 +326,10 @@ resCodes formatFRU(const std::vector<uint8_t>& fruBytes,
             ret = resCodes::resWarn;
         }
 
+        /* Set default language flag to true as Chassis Fru area are always
+         * encoded in English defined in Section 10 of Fru specification
+         */
+        bool isLangEng = true;
         switch (area)
         {
             case fruAreas::fruAreaChassis:
@@ -224,7 +345,7 @@ resCodes formatFRU(const std::vector<uint8_t>& fruBytes,
                 uint8_t lang = *fruBytesIter;
                 result["BOARD_LANGUAGE_CODE"] =
                     std::to_string(static_cast<int>(lang));
-                checkLang(lang);
+                isLangEng = checkLangEng(lang);
                 fruBytesIter += 1;
 
                 unsigned int minutes = *fruBytesIter |
@@ -255,7 +376,7 @@ resCodes formatFRU(const std::vector<uint8_t>& fruBytes,
                 uint8_t lang = *fruBytesIter;
                 result["PRODUCT_LANGUAGE_CODE"] =
                     std::to_string(static_cast<int>(lang));
-                checkLang(lang);
+                isLangEng = checkLangEng(lang);
                 fruBytesIter += 1;
                 fruAreaFieldNames = &PRODUCT_FRU_AREAS;
                 break;
@@ -271,7 +392,8 @@ resCodes formatFRU(const std::vector<uint8_t>& fruBytes,
         DecodeState state;
         do
         {
-            auto res = decodeFRUData(fruBytesIter, fruBytesIterEndArea);
+            auto res =
+                decodeFRUData(fruBytesIter, fruBytesIterEndArea, isLangEng);
             state = res.first;
             std::string value = res.second;
             std::string name;

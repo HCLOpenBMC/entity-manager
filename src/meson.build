@@ -48,6 +48,7 @@ executable(
      'IpmbFruDevice.cpp',
      'Utils.cpp',
      'Common.cpp',
+     'FruUtils.cpp',
       cpp_args: cpp_args,
       dependencies: [
             boost,

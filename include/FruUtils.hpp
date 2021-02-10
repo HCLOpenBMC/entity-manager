@@ -49,6 +49,11 @@ using ReadBlockFunc =
     std::function<int64_t(int flag, int file, uint16_t address, uint16_t offset,
                           uint8_t length, uint8_t* outBuf)>;
 
+/// \brief Get offset for a common header area
+/// \param area - the area
+/// \return the field offset
+unsigned int getHeaderAreaFieldOffset(fruAreas area);
+
 /// \brief Read and validate FRU contents.
 /// \param flag the flag required for raw i2c
 /// \param file the open file handle
@@ -65,7 +70,3 @@ std::vector<uint8_t> readFRUContents(int flag, int file, uint16_t address,
 /// \return true if valid
 bool validateHeader(const std::array<uint8_t, I2C_SMBUS_BLOCK_MAX>& blockData);
 
-/// \brief Get offset for a common header area
-/// \param area - the area
-/// \return the field offset
-unsigned int getHeaderAreaFieldOffset(fruAreas area);
