@@ -7,6 +7,7 @@
             "PowerState": "Always",
             "Name": "$bus + 1 CPLD",
             "SensorType": "version",
+            "PollTime": 600,
             "Type": "IpmbSensor"
         },
         {
@@ -16,6 +17,7 @@
             "PowerState": "Always",
             "Name": "$bus + 1 Bridge IC",
             "SensorType": "version",
+            "PollTime": 600,
             "Type": "IpmbSensor"
         },
         {
@@ -34,6 +36,7 @@
             "PowerState": "Always",
             "Name": "$bus + 1 Bridge IC Bootloader",
             "SensorType": "version",
+            "PollTime": 600,
             "Type": "IpmbSensor"
         },
         {
@@ -43,6 +46,7 @@
             "PowerState": "Always",
             "Name": "$bus + 1 VCCIO VR",
             "SensorType": "version",
+            "PollTime": 600,
             "Type": "IpmbSensor"
         },
         {
@@ -52,6 +56,7 @@
             "PowerState": "Always",
             "Name": "$bus + 1 VCCIN VR",
             "SensorType": "version",
+            "PollTime": 600,
             "Type": "IpmbSensor"
         },
         {
@@ -61,6 +66,7 @@
             "PowerState": "Always",
             "Name": "$bus + 1 VCCSA VR",
             "SensorType": "version",
+            "PollTime": 600,
             "Type": "IpmbSensor"
         },
         {
@@ -70,6 +76,7 @@
             "PowerState": "Always",
             "Name": "$bus + 1 DDR AB VR",
             "SensorType": "version",
+            "PollTime": 600,
             "Type": "IpmbSensor"
         },
         {
@@ -79,6 +86,7 @@
             "PowerState": "Always",
             "Name": "$bus + 1 DDR DE VR",
             "SensorType": "version",
+            "PollTime": 600,
             "Type": "IpmbSensor"
         },
         {
@@ -88,6 +96,7 @@
             "PowerState": "Always",
             "Name": "$bus + 1 VNNPCH VR",
             "SensorType": "version",
+            "PollTime": 600,
             "Type": "IpmbSensor"
         },
         {
@@ -101,7 +110,7 @@
         }
     ],
     "Name": "Twin Lake $bus + 1",
-    "Probe": "xyz.openbmc_project.Ipmb.FruDevice({'PRODUCT_PRODUCT_NAME': 'Twin*'})",
+    "Probe": "xyz.openbmc_project.Ipmb.FruDevice({'PRODUCT_PRODUCT_NAME': 'Twin Lake*'})",
     "Type": "Board",
     "xyz.openbmc_project.Inventory.Decorator.Asset": {
         "Manufacturer": "$PRODUCT_MANUFACTURER",
