@@ -221,6 +221,14 @@
             "Type": "ADC"
         },
         {
+            "Address": "0x80",
+            "PldmType": 2,
+            "Name": "MLX_PRIMARY_TEMP_SENSOR_ID",
+            "SensorID": 1,
+            "MctpID": 9,
+            "Type": "PldmSensor"
+        },
+        {
             "Index": 11,
             "Name": " SP_P1V8_STBY",
             "ScaleFactor": 0.7684,
