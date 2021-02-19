@@ -1566,6 +1566,16 @@
                 }
             ],
             "Type": "pmbus"
+        },
+        {
+            "Name" : "timeManager",
+            "HostId" : "0 4 8 12",
+            "NetFn" : 56,
+            "Lun" : 0,
+            "Cmd" : 2,
+            "CmdData" : "21 160 0 1 40 72",
+            "Type" : "IpmbCellInfo",
+            "Interface" : "Ipmb"
         }
     ],
     "Name": "TiogaPass Baseboard",
