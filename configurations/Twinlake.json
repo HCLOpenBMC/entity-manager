@@ -7,7 +7,7 @@
             "PowerState": "Always",
             "Name": "$bus + 1 CPLD",
             "SensorType": "version",
-            "PollTime": 600,
+            "PollRate": 600,
             "Type": "IpmbSensor"
         },
         {
@@ -17,7 +17,7 @@
             "PowerState": "Always",
             "Name": "$bus + 1 Bridge IC",
             "SensorType": "version",
-            "PollTime": 600,
+            "PollRate": 600,
             "Type": "IpmbSensor"
         },
         {
@@ -27,6 +27,7 @@
             "PowerState": "Always",
             "Name": "$bus + 1 ME",
             "SensorType": "version",
+            "PollRate": 200,
             "Type": "IpmbSensor"
         },
         {
@@ -36,7 +37,7 @@
             "PowerState": "Always",
             "Name": "$bus + 1 Bridge IC Bootloader",
             "SensorType": "version",
-            "PollTime": 600,
+            "PollRate": 600,
             "Type": "IpmbSensor"
         },
         {
@@ -46,7 +47,7 @@
             "PowerState": "Always",
             "Name": "$bus + 1 VCCIO VR",
             "SensorType": "version",
-            "PollTime": 600,
+            "PollRate": 600,
             "Type": "IpmbSensor"
         },
         {
@@ -56,7 +57,7 @@
             "PowerState": "Always",
             "Name": "$bus + 1 VCCIN VR",
             "SensorType": "version",
-            "PollTime": 600,
+            "PollRate": 600,
             "Type": "IpmbSensor"
         },
         {
@@ -66,7 +67,7 @@
             "PowerState": "Always",
             "Name": "$bus + 1 VCCSA VR",
             "SensorType": "version",
-            "PollTime": 600,
+            "PollRate": 600,
             "Type": "IpmbSensor"
         },
         {
@@ -76,7 +77,7 @@
             "PowerState": "Always",
             "Name": "$bus + 1 DDR AB VR",
             "SensorType": "version",
-            "PollTime": 600,
+            "PollRate": 600,
             "Type": "IpmbSensor"
         },
         {
@@ -86,7 +87,7 @@
             "PowerState": "Always",
             "Name": "$bus + 1 DDR DE VR",
             "SensorType": "version",
-            "PollTime": 600,
+            "PollRate": 600,
             "Type": "IpmbSensor"
         },
         {
@@ -96,7 +97,7 @@
             "PowerState": "Always",
             "Name": "$bus + 1 VNNPCH VR",
             "SensorType": "version",
-            "PollTime": 600,
+            "PollRate": 600,
             "Type": "IpmbSensor"
         },
         {
